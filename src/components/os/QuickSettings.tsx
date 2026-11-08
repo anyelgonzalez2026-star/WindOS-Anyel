@@ -149,7 +149,7 @@ export function QuickSettings() {
         <Toggle active={quick.wifi && !quick.airplane} icon={Wifi} label="Wi-Fi" sublabel={online ? "Home network" : "Offline"} onClick={() => setQuick({ wifi: !quick.wifi })} />
         <Toggle active={quick.bluetooth} icon={Bluetooth} label="Bluetooth" sublabel={quick.bluetooth ? "On" : "Off"} onClick={() => setQuick({ bluetooth: !quick.bluetooth })} />
         <Toggle active={quick.airplane} icon={Plane} label="Airplane" sublabel="Radio off" onClick={() => setQuick({ airplane: !quick.airplane })} />
-        <Toggle active={quick.batterySaver} icon={Zap} label="Battery saver" sublabel={settings.powerPlan === "saver" ? "Plan: saver" : "Balanced"} onClick={() => {
+        <Toggle active={quick.batterySaver} icon={Zap} label="Battery saver" sublabel={`Plan: ${settings.powerPlan}`} onClick={() => {
           const next = !quick.batterySaver;
           setQuick({ batterySaver: next });
           updateSettings({ powerPlan: next ? "saver" : "balanced" });

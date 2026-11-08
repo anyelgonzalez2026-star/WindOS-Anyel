@@ -32,7 +32,7 @@ import {
   VirtualFileSystem,
   type SerializedFS,
 } from "./fs";
-import { checksum, kvDel, kvGet, kvSet, storageEstimate } from "./db";
+import { checksum, kvAvailable, kvDel, kvGet, kvSet, storageEstimate } from "./db";
 import {
   DEFAULT_SETTINGS,
   loadSettings,
@@ -91,6 +91,7 @@ export interface DesktopSpec {
 export interface OSContextValue {
   ready: boolean;
   fsReady: boolean;
+  fsPersistent: boolean;
   power: PowerState;
   settings: OSSettings;
   updateSettings: (patch: Partial<OSSettings>) => void;
@@ -141,7 +142,7 @@ export interface OSContextValue {
   installApp: (id: string) => void;
   uninstallApp: (id: string) => boolean;
   updateApp: (id: string) => void;
-  applyAllUpdates: () => void;
+  applyAllUpdates: () => RestorePoint | null;
   appUpdates: { app: AppDefinition; from: string }[];
   isInstalled: (id: string) => boolean;
   quick: QuickSettings;
@@ -173,7 +174,7 @@ export interface OSContextValue {
   applyRestorePoint: (id: string, mode: "settings" | "files" | "full") => boolean;
   deleteRestorePoint: (id: string) => void;
   lastBackupAt: number;
-  buildBackup: (options: BackupOptions) => string;
+  buildBackup: (options: BackupOptions, record?: boolean) => string;
   importBackup: (json: string, mode: "replace" | "merge") => { files: number };
   wipeAll: () => Promise<void>;
   storage: { usage: number; quota: number };
@@ -309,6 +310,8 @@ export function OSProvider({ children }: { children: ReactNode }) {
   const zCounter = useRef(20);
   const pidCounter = useRef(1200);
   const sessionStarted = useRef(false);
+  const updateCheckNotified = useRef(false);
+  const storageWarned = useRef(false);
 
   const [desktops, setDesktops] = useState<DesktopSpec[]>(() =>
     readJson<DesktopSpec[]>(DESKTOP_KEY, [
@@ -434,10 +437,8 @@ export function OSProvider({ children }: { children: ReactNode }) {
       if (cancelled) return;
       if (stored && Array.isArray(stored.nodes) && stored.nodes.length) {
         fs.replace(stored);
-        setFsPersistent(true);
-      } else {
-        setFsPersistent(true);
       }
+      setFsPersistent(await kvAvailable());
       setFsReady(true);
       setReady(true);
       const rp = await kvGet<RestorePoint[]>(RP_KEY);
@@ -472,8 +473,9 @@ export function OSProvider({ children }: { children: ReactNode }) {
     const id = window.setInterval(() => {
       setStats((prev) => {
         const load = windows.filter((w) => !w.minimized).length;
-        const cpu = clamp(prev.cpu + (Math.random() - 0.5) * 12 + load * 0.6, 6, 88);
-        const mem = clamp(30 + windows.length * 4 + Math.random() * 8, 22, 82);
+        const planFactor = settings.powerPlan === "saver" ? 0.72 : settings.powerPlan === "performance" ? 1.16 : 1;
+        const cpu = clamp((prev.cpu + (Math.random() - 0.5) * 12 + load * 0.6) * planFactor, 4, 94);
+        const mem = clamp((30 + windows.length * 4 + Math.random() * 8) * (settings.powerPlan === "saver" ? 0.88 : settings.powerPlan === "performance" ? 1.08 : 1), 18, 90);
         const network = clamp(prev.network + (Math.random() - 0.5) * 7, 0, 60);
         return {
           cpu: Math.round(cpu),
@@ -498,7 +500,7 @@ export function OSProvider({ children }: { children: ReactNode }) {
       );
     }, 1800);
     return () => window.clearInterval(id);
-  }, [windows.length]);
+  }, [windows.length, settings.powerPlan]);
 
   // Calendars/tasks reminder notifications are sent by those apps directly.
   useEffect(() => {
@@ -1027,6 +1029,42 @@ export function OSProvider({ children }: { children: ReactNode }) {
     return [];
   });
 
+  // Automatic update checks are opt-out. This reports availability after boot;
+  // applying packages still requires an explicit action in WindUpdate.
+  useEffect(() => {
+    if (power === "boot") {
+      updateCheckNotified.current = false;
+      return;
+    }
+    if (power !== "desktop" || !settings.autoUpdates || updateCheckNotified.current) return;
+    updateCheckNotified.current = true;
+    if (appUpdates.length === 0) return;
+    const timer = window.setTimeout(() => {
+      notify({
+        appId: "WindOS",
+        title: `${appUpdates.length} app update${appUpdates.length === 1 ? "" : "s"} available`,
+        body: "Automatic update checks are on. Review the local packages in WindUpdate.",
+        actions: [{ label: "Review updates", appId: "update" }],
+      });
+    }, 1600);
+    return () => window.clearTimeout(timer);
+    // appUpdates is derived from installed; its length is enough to avoid noisy re-checks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [power, settings.autoUpdates, appUpdates.length]);
+
+  // Warn once when the simulated 512 MB drive crosses 90% usage.
+  useEffect(() => {
+    if (!fsReady || power !== "desktop") return;
+    const ratio = fs.usage().bytes / (512 * 1024 * 1024);
+    if (ratio >= 0.9 && !storageWarned.current) {
+      storageWarned.current = true;
+      notify({ appId: "WindOS", title: "Virtual drive almost full", body: "The WindOS drive is above 90% capacity. Empty the Recycle Bin or export large files." });
+      logEvent({ level: "warning", title: "Storage threshold", detail: `Virtual drive usage reached ${Math.round(ratio * 100)}%.` });
+    }
+    if (ratio < 0.8) storageWarned.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fsVersion, fsReady, power]);
+
   function installApp(id: string) {
     const def = APP_MAP.get(id);
     if (!def || isInstalled(id)) return;
@@ -1085,13 +1123,13 @@ export function OSProvider({ children }: { children: ReactNode }) {
     notify({ appId: "WindOS", title: "Update installed", body: `${def.name} is now version ${def.version}.` });
   }
 
-  function applyAllUpdates() {
+  function applyAllUpdates(): RestorePoint | null {
     const outdated = appUpdates;
     if (!outdated.length) {
       notify({ appId: "WindOS", title: "Everything is current", body: "No app updates are waiting." });
-      return;
+      return null;
     }
-    createRestorePoint("Before app updates", "update");
+    const point = createRestorePoint("Before app updates", "update");
     setInstalled((prev) =>
       prev.map((inst) => {
         const def = APP_MAP.get(inst.id);
@@ -1101,11 +1139,26 @@ export function OSProvider({ children }: { children: ReactNode }) {
     logEvent({ level: "info", title: "Updates installed", detail: `${outdated.length} package updates were applied.` });
     notify({ appId: "WindOS", title: "Updates installed", body: `${outdated.length} app update${outdated.length === 1 ? "" : "s"} applied successfully.` });
     playSound("install", settings.sounds);
+    return point;
   }
 
   // ---------------------------------------------------------------- clipboard
   async function copyText(text: string, source = "WindOS"): Promise<boolean> {
     const trimmed = text.slice(0, 20000);
+    const sourceApp = APP_MAP.get(source) ?? APPS.find((app) => app.name === source);
+    const sourceId = sourceApp?.id ?? (source === "WindOS" ? "WindOS" : source);
+    if (sourceId !== "WindOS" && sourceId !== "system" && !hasPermission(sourceId, "clipboard")) {
+      const granted = await requestPermission(sourceId, "clipboard");
+      if (!granted) {
+        logEvent({
+          level: "warning",
+          title: "Clipboard copy blocked",
+          detail: `${sourceApp?.name ?? sourceId} tried to write to the clipboard without permission.`,
+          appId: sourceId,
+        });
+        return false;
+      }
+    }
     setClipboard((prev) =>
       [
         {
@@ -1134,8 +1187,10 @@ export function OSProvider({ children }: { children: ReactNode }) {
   }
 
   async function readClipboard(appId = "WindOS"): Promise<string> {
-    if (appId !== "WindOS" && !hasPermission(appId, "clipboard")) {
-      const ok = await requestPermission(appId, "clipboard");
+    const known = APP_MAP.get(appId) ?? APPS.find((app) => app.name === appId);
+    const resolvedId = known?.id ?? appId;
+    if (resolvedId !== "WindOS" && resolvedId !== "system" && !hasPermission(resolvedId, "clipboard")) {
+      const ok = await requestPermission(resolvedId, "clipboard");
       if (!ok) return "";
     }
     try {
@@ -1233,9 +1288,10 @@ export function OSProvider({ children }: { children: ReactNode }) {
       void kvSet(RP_KEY, next);
       return next;
     });
+    logEvent({ level: "info", title: "Restore point deleted", detail: `Restore point ${id} was removed from local storage.` });
   }
 
-  function buildBackup(options: BackupOptions): string {
+  function buildBackup(options: BackupOptions, record = true): string {
     const emptyFs: SerializedFS = { version: 1, nodes: [], exportedAt: Date.now() };
     const data = {
       settings: options.includeSettings ? settings : { ...DEFAULT_SETTINGS, displayName: settings.displayName },
@@ -1254,12 +1310,14 @@ export function OSProvider({ children }: { children: ReactNode }) {
       checksum: checksum(JSON.stringify(data)),
       data,
     };
-    const now = Date.now();
-    setLastBackupAt(now);
-    try {
-      localStorage.setItem(BACKUP_TIME_KEY, String(now));
-    } catch {
-      /* ignore */
+    if (record) {
+      const now = Date.now();
+      setLastBackupAt(now);
+      try {
+        localStorage.setItem(BACKUP_TIME_KEY, String(now));
+      } catch {
+        /* ignore */
+      }
     }
     return JSON.stringify(payload, null, 2);
   }
@@ -1438,6 +1496,7 @@ export function OSProvider({ children }: { children: ReactNode }) {
   const value: OSContextValue = {
     ready,
     fsReady,
+    fsPersistent,
     power,
     settings,
     updateSettings,

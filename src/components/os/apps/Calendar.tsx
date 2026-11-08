@@ -14,6 +14,7 @@ export default function Calendar() {
   const [selectedDate, setSelectedDate] = useState(todayISO());
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<{ id?: string; title: string; date: string; time: string; color: string; notes: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<CalendarEvent | null>(null);
   const [error, setError] = useState("");
   const remindersSent = useRef(false);
   const hasNotifications = os.hasPermission("calendar", "notifications");
@@ -93,7 +94,21 @@ export default function Calendar() {
   }
 
   return (
-    <AppShell>
+    <AppShell
+      onKeyDown={(event) => {
+        if (editor || pendingDelete) return;
+        const tag = (event.target as HTMLElement | null)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (event.key === "ArrowLeft" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          event.preventDefault();
+          shiftMonth(-1);
+        }
+        if (event.key === "ArrowRight" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          event.preventDefault();
+          shiftMonth(1);
+        }
+      }}
+    >
       <AppHeader
         icon={CalendarDays}
         title="WindCalendar"
@@ -188,7 +203,7 @@ export default function Calendar() {
                       </div>
                       <div className="flex shrink-0 gap-0.5 opacity-0 transition group-hover:opacity-100">
                         <button className="rounded p-1 hover:bg-muted" onClick={() => openEdit(event)} aria-label="Edit event"><Pencil className="size-3" /></button>
-                        <button className="rounded p-1 text-red-500 hover:bg-red-500/10" onClick={() => deleteEvent(event.id)} aria-label="Delete event"><Trash2 className="size-3" /></button>
+                        <button className="rounded p-1 text-red-500 hover:bg-red-500/10" onClick={() => setPendingDelete(event)} aria-label="Delete event"><Trash2 className="size-3" /></button>
                       </div>
                     </div>
                   </div>
@@ -201,6 +216,19 @@ export default function Calendar() {
           </div>
         </aside>
       </div>
+
+      {pendingDelete && (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-xl border border-border bg-popover p-4 shadow-2xl">
+            <h3 className="text-[13px] font-semibold">Delete “{pendingDelete.title}”?</h3>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">This removes the event from WindCalendar. The action cannot be undone.</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <GhostButton onClick={() => setPendingDelete(null)}>Cancel</GhostButton>
+              <PrimaryButton className="bg-red-600 hover:bg-red-500" onClick={() => { deleteEvent(pendingDelete.id); setPendingDelete(null); }}><Trash2 className="size-3.5" /> Delete event</PrimaryButton>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editor && (
         <div className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">

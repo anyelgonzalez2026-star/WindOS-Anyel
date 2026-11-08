@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useOS } from "@/lib/os/store";
+import { usePersisted } from "@/lib/os/hooks";
 import { APP_MAP } from "@/lib/os/registry";
 import { AppIcon } from "./AppIcon";
 import { openFileNode } from "@/lib/os/fileActions";
@@ -10,6 +11,7 @@ export function SearchPanel({ open, onClose }: { open: boolean; onClose: () => v
   const os = useOS();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
+  const [recent, setRecent] = usePersisted<string[]>("search.recent.v1", []);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -36,6 +38,10 @@ export function SearchPanel({ open, onClose }: { open: boolean; onClose: () => v
   function run(index: number) {
     const item = items[index];
     if (!item) return;
+    const term = query.trim();
+    if (term) {
+      setRecent((previous) => [term, ...previous.filter((entry) => entry.toLowerCase() !== term.toLowerCase())].slice(0, 8));
+    }
     switch (item.kind) {
       case "app":
         os.openApp(item.app.id);
@@ -101,6 +107,22 @@ export function SearchPanel({ open, onClose }: { open: boolean; onClose: () => v
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {!query.trim() ? (
             <div className="px-2 py-5">
+              {recent.length > 0 && (
+                <div className="mb-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-xs font-medium text-muted-foreground">Recent searches</p>
+                    <button className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => setRecent([])}>Clear</button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {recent.map((term) => (
+                      <span key={term} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 py-1 pl-2 pr-1 text-[10px]">
+                        <button className="max-w-40 truncate hover:text-primary" onClick={() => { setQuery(term); setSelected(0); inputRef.current?.focus(); }}>{term}</button>
+                        <button className="rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setRecent((previous) => previous.filter((entry) => entry !== term))} aria-label={`Remove ${term} from recent searches`}><X className="size-2.5" /></button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <p className="mb-3 text-xs font-medium text-muted-foreground">Search across WindOS</p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {[
@@ -133,7 +155,7 @@ export function SearchPanel({ open, onClose }: { open: boolean; onClose: () => v
           ) : (
             <div className="space-y-3">
               {results.apps.length > 0 && (
-                <Group title="Applications">
+                <Group title={`Applications (${results.apps.length})`}>
                   {results.apps.map((app) => (
                     <Row
                       key={app.id}
@@ -151,7 +173,7 @@ export function SearchPanel({ open, onClose }: { open: boolean; onClose: () => v
                 </Group>
               )}
               {results.files.length > 0 && (
-                <Group title="Files">
+                <Group title={`Files (${results.files.length})`}>
                   {results.files.map((file) => (
                     <Row key={file.id} active={items[selected]?.id === file.id} onClick={() => run(items.findIndex((i) => i.id === file.id))}>
                       <FileText className="size-4 text-muted-foreground" />
@@ -164,7 +186,7 @@ export function SearchPanel({ open, onClose }: { open: boolean; onClose: () => v
                 </Group>
               )}
               {results.settings.length > 0 && (
-                <Group title="Settings">
+                <Group title={`Settings (${results.settings.length})`}>
                   {results.settings.map((entry) => (
                     <Row key={entry.id} active={false} onClick={() => run(items.findIndex((i) => i.id === entry.id))}>
                       <Settings2 className="size-4 text-muted-foreground" />
@@ -177,7 +199,7 @@ export function SearchPanel({ open, onClose }: { open: boolean; onClose: () => v
                 </Group>
               )}
               {results.features.length > 0 && (
-                <Group title="Feature registry">
+                <Group title={`Feature registry (${results.features.length})`}>
                   {results.features.map((feature) => (
                     <Row key={feature.id} active={items[selected]?.id === feature.id} onClick={() => run(items.findIndex((i) => i.id === feature.id))}>
                       <Sparkles className="size-4 text-primary/70" />
@@ -190,7 +212,7 @@ export function SearchPanel({ open, onClose }: { open: boolean; onClose: () => v
                 </Group>
               )}
               {results.topics.length > 0 && (
-                <Group title="Help">
+                <Group title={`Help (${results.topics.length})`}>
                   {results.topics.map((topic) => (
                     <Row key={topic.id} active={items[selected]?.id === topic.id} onClick={() => run(items.findIndex((i) => i.id === topic.id))}>
                       <Sparkles className="size-4 text-muted-foreground" />
@@ -203,7 +225,7 @@ export function SearchPanel({ open, onClose }: { open: boolean; onClose: () => v
                 </Group>
               )}
               {results.actions.length > 0 && (
-                <Group title="Actions">
+                <Group title={`Actions (${results.actions.length})`}>
                   {results.actions.map((action) => (
                     <Row key={action.id} active={items[selected]?.id === action.id} onClick={() => run(items.findIndex((i) => i.id === action.id))}>
                       <Command className="size-4 text-muted-foreground" />

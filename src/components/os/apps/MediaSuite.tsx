@@ -6,7 +6,7 @@ import { downloadBlob } from "@/lib/os/zip";
 import { playSound } from "@/lib/os/sound";
 import { cn } from "@/lib/utils";
 import { AppShell, AppHeader, AppToolbar, EmptyState, GhostButton, PrimaryButton, SearchInput, inputClass, Panel, SectionTitle, Pill } from "./ui";
-import { AlarmClock, Bell, Camera, Check, ChevronLeft, ChevronRight, Clock3, Download, Globe2, Image as ImageIcon, Images, Maximize2, Mic, Music, Pause, Play, Plus, Repeat, RotateCw, Shuffle, Square, Star, TimerReset, Trash2, Upload, Video, Volume2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { AlarmClock, Bell, Camera, Check, ChevronLeft, ChevronRight, Clock3, Download, Globe2, Image as ImageIcon, Images, Maximize2, Mic, Music, Pause, Play, Plus, Repeat, RotateCw, Shuffle, Square, Star, TimerReset, Trash2, Upload, Video, Volume2, VolumeX, X, ZoomIn, ZoomOut } from "lucide-react";
 
 /* ------------------------------------------------------------------- Clock */
 
@@ -44,6 +44,9 @@ export function Clock() {
   const timerEnd = useRef(0);
 
   const date = new Date(now);
+  const secondAngle = date.getSeconds() * 6;
+  const minuteAngle = date.getMinutes() * 6 + date.getSeconds() * 0.1;
+  const hourAngle = (date.getHours() % 12) * 30 + date.getMinutes() * 0.5;
 
   useEffect(() => {
     if (!swRunning) return;
@@ -100,7 +103,7 @@ export function Clock() {
 
   return (
     <AppShell>
-      <AppHeader icon={Clock3} title="WindClock" subtitle="Local time, world clocks, alarms, timer and stopwatch" actions={<span className="font-mono text-[11px] text-muted-foreground">{formatTime(date, os.settings.clock24h, true)}</span>} />
+      <AppHeader icon={Clock3} title="WindClock" subtitle="Local time, world clocks, alarms, timer and stopwatch" actions={<span className="font-mono text-[11px] text-muted-foreground">{formatTime(date, os.settings.clock24h, os.settings.showSeconds)}</span>} />
       <AppToolbar>
         {(["clock", "alarm", "timer", "stopwatch"] as const).map((item) => <button key={item} onClick={() => setTab(item)} className={cn("rounded px-2.5 py-1 text-[10.5px] font-medium capitalize", tab === item ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted")}>{item}</button>)}
         {fired && <span className="ml-auto flex items-center gap-1 text-[9.5px] text-primary"><Bell className="size-3" /> {fired}</span>}
@@ -110,8 +113,21 @@ export function Clock() {
           <div className="mx-auto max-w-lg space-y-3">
             <div className="rounded-2xl border border-border/70 bg-gradient-to-br from-primary/10 via-card to-card p-6 text-center">
               <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</p>
-              <p className="mt-1 text-[46px] font-semibold leading-none tracking-tight tabular-nums">{formatTime(date, os.settings.clock24h, true)}</p>
+              <p className="mt-1 text-[46px] font-semibold leading-none tracking-tight tabular-nums">{formatTime(date, os.settings.clock24h, os.settings.showSeconds)}</p>
               <p className="mt-2 text-[9px] text-muted-foreground">{Intl.DateTimeFormat().resolvedOptions().timeZone}</p>
+              <svg viewBox="0 0 200 200" className="mx-auto mt-4 size-36" role="img" aria-label={`Analog clock showing ${formatTime(date, os.settings.clock24h, true)}`}>
+                <circle cx="100" cy="100" r="94" fill="none" stroke="currentColor" strokeOpacity="0.14" strokeWidth="2" />
+                {Array.from({ length: 12 }, (_, index) => {
+                  const angle = (index * 30 * Math.PI) / 180;
+                  const outer = 82;
+                  const inner = index % 3 === 0 ? 72 : 77;
+                  return <line key={index} x1={100 + Math.sin(angle) * inner} y1={100 - Math.cos(angle) * inner} x2={100 + Math.sin(angle) * outer} y2={100 - Math.cos(angle) * outer} stroke="currentColor" strokeOpacity={index % 3 === 0 ? 0.55 : 0.22} strokeWidth={index % 3 === 0 ? 3 : 1.5} strokeLinecap="round" />;
+                })}
+                <line x1="100" y1="100" x2={100 + Math.sin((hourAngle * Math.PI) / 180) * 44} y2={100 - Math.cos((hourAngle * Math.PI) / 180) * 44} stroke="var(--os-accent, #4f5bd5)" strokeWidth="6" strokeLinecap="round" />
+                <line x1="100" y1="100" x2={100 + Math.sin((minuteAngle * Math.PI) / 180) * 66} y2={100 - Math.cos((minuteAngle * Math.PI) / 180) * 66} stroke="currentColor" strokeOpacity="0.72" strokeWidth="3.5" strokeLinecap="round" />
+                <line x1="100" y1="100" x2={100 + Math.sin((secondAngle * Math.PI) / 180) * 72} y2={100 - Math.cos((secondAngle * Math.PI) / 180) * 72} stroke="#e16b5a" strokeWidth="1.5" strokeLinecap="round" />
+                <circle cx="100" cy="100" r="4" fill="var(--os-accent, #4f5bd5)" />
+              </svg>
             </div>
             <Panel>
               <SectionTitle>World clocks</SectionTitle>
@@ -124,7 +140,7 @@ export function Clock() {
                       <span className="flex-1 text-[10px] font-medium">{label}</span>
                       <span className="font-mono text-[12px] tabular-nums">{date.toLocaleTimeString(undefined, { timeZone: zone, hour: "2-digit", minute: "2-digit", hour12: !os.settings.clock24h })}</span>
                       <span className="w-24 text-right text-[8px] text-muted-foreground">{date.toLocaleDateString(undefined, { timeZone: zone, weekday: "short", month: "short", day: "numeric" })}</span>
-                      <button className="rounded p-0.5 text-muted-foreground hover:text-red-500" onClick={() => setZones((prev) => prev.filter((value) => value !== zone))} aria-label={`Remove ${label}`}><X className="size-3" /></button>
+                      {zone === "UTC" ? <span className="rounded bg-muted px-1 py-0.5 text-[7.5px] text-muted-foreground">reference</span> : <button className="rounded p-0.5 text-muted-foreground hover:text-red-500" onClick={() => setZones((prev) => prev.filter((value) => value !== zone))} aria-label={`Remove ${label}`}><X className="size-3" /></button>}
                     </div>
                   );
                 })}
@@ -146,8 +162,9 @@ export function Clock() {
                 <input type="time" value={alarmTime} onChange={(event) => setAlarmTime(event.target.value)} className={cn(inputClass, "w-28 text-[13px]")} aria-label="Alarm time" />
                 <input value={alarmLabel} onChange={(event) => setAlarmLabel(event.target.value)} placeholder="Label" className={inputClass} />
                 <PrimaryButton onClick={addAlarm}><Plus className="size-3.5" /> Add</PrimaryButton>
+                <GhostButton onClick={() => playSound("notify", true)}><Bell className="size-3.5" /> Test tone</GhostButton>
               </div>
-              <p className="mt-1 text-[8.5px] text-muted-foreground">Alarms fire while WindOS is open. Notifications require the notifications permission.</p>
+              <p className="mt-1 text-[8.5px] text-muted-foreground">Alarms fire while WindOS is open. Notifications require the notifications permission. Test tone previews the generated chime even when notification sounds are disabled.</p>
             </Panel>
             <div className="space-y-1.5">
               {alarms.length === 0 && <EmptyState icon={AlarmClock} title="No alarms" body="Add an alarm for a gentle nudge inside WindOS." />}
@@ -216,10 +233,12 @@ async function imageToDataUrl(file: File): Promise<string> {
   return canvas.toDataURL("image/jpeg", 0.82);
 }
 
-export function Photos() {
+export function Photos({ windowId }: { windowId?: string }) {
   const os = useOS();
+  const isActive = windowId ? os.activeWindowId === windowId : true;
   const images = os.fs.children("folder_pictures").filter((node) => node.type === "file" && ((node.mime ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/i.test(node.name)));
   const [selectedId, setSelectedId] = useState<string | null>(images[0]?.id ?? null);
+  const [dimensions, setDimensions] = useState("");
   const [query, setQuery] = useState("");
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -227,6 +246,8 @@ export function Photos() {
   const [sort, setSort] = useState<"newest" | "name" | "favourites">("newest");
   const [toast, setToast] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => setDimensions(""), [selectedId]);
   const selected = selectedId ? os.fs.byId(selectedId) : images[0];
   const filtered = images.filter((node) => node.name.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === "name" ? a.name.localeCompare(b.name) : sort === "favourites" ? Number(b.favorite) - Number(a.favorite) || b.modifiedAt - a.modifiedAt : b.modifiedAt - a.modifiedAt);
 
@@ -245,6 +266,7 @@ export function Photos() {
   useEffect(() => setZoom(1), [selectedId]);
 
   useEffect(() => {
+    if (!isActive) return;
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
@@ -256,7 +278,7 @@ export function Photos() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [filtered, selectedId]);
+  }, [filtered, selectedId, isActive]);
 
   function flash(message: string) { setToast(message); window.setTimeout(() => setToast(""), 2600); }
 
@@ -276,14 +298,14 @@ export function Photos() {
       <AppToolbar>
         <SearchInput value={query} onChange={setQuery} placeholder="Find a photo" className="w-44" />
         <select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)} className="h-7 rounded border border-border bg-background px-1 text-[9px]" aria-label="Sort photos"><option value="newest">Newest first</option><option value="name">Name A–Z</option><option value="favourites">Favourites first</option></select>
-        {selected && <span className="ml-auto truncate text-[9.5px] text-muted-foreground">{selected.name} · {formatBytes(selected.size)}</span>}
+        {selected && <span className="ml-auto truncate text-[9.5px] text-muted-foreground">{selected.name} · {formatBytes(selected.size)}{dimensions ? ` · ${dimensions}` : ""}</span>}
       </AppToolbar>
       <div className="flex min-h-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#0e1420]">
           {selected && selected.content ? (
             <>
               <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-3">
-                <img src={selected.content} alt={selected.name} className="max-h-full max-w-full rounded-md object-contain shadow-2xl transition-transform" style={{ transform: `scale(${zoom}) rotate(${rotation}deg)` }} />
+                <img src={selected.content} alt={selected.name} onLoad={(event) => setDimensions(`${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`)} className="max-h-full max-w-full rounded-md object-contain shadow-2xl transition-transform" style={{ transform: `scale(${zoom}) rotate(${rotation}deg)` }} />
               </div>
               <div className="flex flex-wrap items-center justify-center gap-1.5 border-t border-white/10 px-3 py-2">
                 <button className="rounded p-1.5 text-white/60 hover:bg-white/10" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))} aria-label="Zoom out"><ZoomOut className="size-4" /></button>
@@ -334,9 +356,12 @@ export function Media({ payload }: { payload?: Record<string, unknown> }) {
   const [loop, setLoop] = useState(false);
   const [shuffle, setShuffle] = useState(false);
   const [speed, setSpeed] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const [codecError, setCodecError] = useState("");
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const mediaRef = useRef<HTMLMediaElement | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const selected = selectedId ? os.fs.byId(selectedId) : media[0];
   const isVideo = selected?.mime?.startsWith("video/") || /\.(mp4|webm|mov)$/i.test(selected?.name ?? "");
@@ -345,14 +370,23 @@ export function Media({ payload }: { payload?: Record<string, unknown> }) {
   useEffect(() => {
     if (!mediaRef.current) return;
     mediaRef.current.volume = volume;
+    mediaRef.current.muted = muted;
     mediaRef.current.loop = loop;
     mediaRef.current.playbackRate = speed;
-  }, [volume, loop, speed, selectedId]);
+  }, [volume, muted, loop, speed, selectedId]);
+
+  useEffect(() => {
+    setCodecError("");
+    setCurrentTime(0);
+    setDuration(0);
+    setPlaying(false);
+  }, [selectedId]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT") return;
+      if (!target || !shellRef.current?.contains(target)) return;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return;
       if (event.code === "Space") { event.preventDefault(); const element = mediaRef.current; if (element) { if (element.paused) void element.play(); else element.pause(); } }
       if (event.key === "ArrowRight" && mediaRef.current) mediaRef.current.currentTime = Math.min(mediaRef.current.duration || 0, mediaRef.current.currentTime + 10);
       if (event.key === "ArrowLeft" && mediaRef.current) mediaRef.current.currentTime = Math.max(0, mediaRef.current.currentTime - 10);
@@ -396,7 +430,7 @@ export function Media({ payload }: { payload?: Record<string, unknown> }) {
   }
 
   return (
-    <AppShell>
+    <AppShell containerRef={shellRef}>
       <AppHeader icon={Music} title="WindMedia" subtitle="Audio and video from the virtual drive · local files only" actions={<GhostButton onClick={() => inputRef.current?.click()}><Upload className="size-3.5" /> Import media</GhostButton>} />
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-[210px] shrink-0 flex-col border-r border-border/60 bg-muted/15">
@@ -415,15 +449,16 @@ export function Media({ payload }: { payload?: Record<string, unknown> }) {
         <div className="flex min-w-0 flex-1 flex-col bg-[#0d1420]">
           {selected?.content ? (
             <>
+              {codecError && <div className="flex items-start gap-2 border-b border-amber-400/25 bg-amber-500/10 px-3 py-2 text-[9px] text-amber-200"><VolumeX className="mt-0.5 size-3.5 shrink-0" /><span>{codecError} Try a different file or open it in an external player. WindOS can only play codecs supported by this browser.</span></div>}
               <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-3">
                 {isVideo ? (
-                  <video ref={(element) => { mediaRef.current = element; }} src={selected.content} controls loop={loop} className="max-h-full max-w-full rounded-lg bg-black shadow-2xl" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)} onEnded={() => { if (!loop && media.length > 1) next(1); }} />
+                  <video ref={(element) => { mediaRef.current = element; }} src={selected.content} controls loop={loop} className="max-h-full max-w-full rounded-lg bg-black shadow-2xl" onPlay={() => { setPlaying(true); setCodecError(""); }} onPause={() => setPlaying(false)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration); setCodecError(""); }} onError={() => setCodecError(`“${selected.name}” could not be decoded by this browser.`)} onEnded={() => { if (!loop && media.length > 1) next(1); }} />
                 ) : (
                   <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-white/[0.04] p-6 text-center">
                     <div className="mx-auto flex size-20 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-400/20 to-indigo-500/20 text-teal-300"><Music className="size-9" /></div>
                     <p className="mt-3 truncate text-[12px] font-medium text-white">{selected.name}</p>
                     <p className="text-[9px] text-white/40">{formatBytes(selected.size)} · {selected.mime ?? "audio"}</p>
-                    <audio ref={(element) => { mediaRef.current = element; }} src={selected.content} controls loop={loop} className="mt-4 w-full" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)} onEnded={() => { if (!loop && media.length > 1) next(1); }} />
+                    <audio ref={(element) => { mediaRef.current = element; }} src={selected.content} controls loop={loop} className="mt-4 w-full" onPlay={() => { setPlaying(true); setCodecError(""); }} onPause={() => setPlaying(false)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration); setCodecError(""); }} onError={() => setCodecError(`“${selected.name}” could not be decoded by this browser.`)} onEnded={() => { if (!loop && media.length > 1) next(1); }} />
                   </div>
                 )}
               </div>
@@ -433,9 +468,9 @@ export function Media({ payload }: { payload?: Record<string, unknown> }) {
                 <button className="rounded p-1 text-white/60 hover:bg-white/10" onClick={() => next(1)} aria-label="Next"><ChevronRight className="size-4" /></button>
                 <button className={`rounded p-1 hover:bg-white/10 ${shuffle ? "text-teal-300" : "text-white/60"}`} onClick={() => setShuffle((value) => !value)} aria-label="Shuffle" title="Shuffle"><Shuffle className="size-3.5" /></button>
                 <button className={`rounded p-1 hover:bg-white/10 ${loop ? "text-teal-300" : "text-white/60"}`} onClick={() => setLoop((value) => !value)} aria-label="Loop" title="Loop"><Repeat className="size-3.5" /></button>
-                <select value={speed} onChange={(event) => setSpeed(Number(event.target.value))} className="h-6 rounded border border-white/15 bg-[#182131] px-1 text-[8.5px] text-white/70" aria-label="Playback speed"><option value={0.75}>0.75×</option><option value={1}>1×</option><option value={1.25}>1.25×</option><option value={1.5}>1.5×</option><option value={2}>2×</option></select>
+                <select value={speed} onChange={(event) => setSpeed(Number(event.target.value))} className="h-6 rounded border border-white/15 bg-[#182131] px-1 text-[8.5px] text-white/70" aria-label="Playback speed"><option value={0.5}>0.5×</option><option value={0.75}>0.75×</option><option value={1}>1×</option><option value={1.25}>1.25×</option><option value={1.5}>1.5×</option><option value={2}>2×</option></select>
                 <span className="text-[8.5px] tabular-nums text-white/45">{formatTime(currentTime)} / {formatTime(duration)}</span>
-                <div className="ml-2 flex items-center gap-1.5 text-white/50"><Volume2 className="size-3.5" /><input type="range" min={0} max={100} value={volume * 100} onChange={(event) => setVolume(Number(event.target.value) / 100)} className="w-20 accent-white" aria-label="Volume" /></div>
+                <div className="ml-2 flex items-center gap-1.5 text-white/50"><button className="rounded p-0.5 hover:bg-white/10" onClick={() => setMuted((value) => !value)} aria-label={muted ? "Unmute" : "Mute"} title={muted ? "Unmute" : "Mute"}>{muted ? <VolumeX className="size-3.5" /> : <Volume2 className="size-3.5" />}</button><input type="range" min={0} max={100} value={muted ? 0 : volume * 100} onChange={(event) => { setMuted(false); setVolume(Number(event.target.value) / 100); }} className="w-20 accent-white" aria-label="Volume" /></div>
                 <span className="ml-auto text-[8.5px] text-white/30">Virtual files · no streaming</span>
               </div>
             </>

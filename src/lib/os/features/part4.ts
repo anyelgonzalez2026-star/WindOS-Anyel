@@ -111,7 +111,7 @@ export const PART_FOUR: RawFeatureCategory[] = [
       ["Document metadata", "Title and author are written into the document.", "WindPDF"],
       ["Save into drive", "Generated PDFs persist in the virtual filesystem.", "WindPDF"],
       ["Download PDF", "Generated files download to the host.", "WindPDF"],
-      ["Page size", "US Letter page geometry.", "WindPDF"],
+      ["Page size", "A4 page geometry with automatic pagination.", "WindPDF"],
       ["File details", "Name, size and type are displayed.", "WindPDF"],
       ["Print", "The browser print dialog can print the current document.", "WindPDF"],
       ["Object URL cleanup", "Generated preview URLs are revoked on change.", "WindPDF"],

@@ -45,8 +45,27 @@ export default function Weather() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [unit, setUnit] = useState<"C" | "F">("C");
+  const [hostOnline, setHostOnline] = useState(navigator.onLine);
+  const networkAvailable = hostOnline && os.quick.wifi && !os.quick.airplane;
+
+  useEffect(() => {
+    const update = () => setHostOnline(navigator.onLine);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
 
   const load = useCallback(async (city: City) => {
+    if (!networkAvailable) {
+      setLoading(false);
+      setError(os.quick.airplane ? "WindOS is in Airplane mode — showing the local fallback model." : !os.quick.wifi ? "Wi-Fi is disabled in WindOS — showing the local fallback model." : "The host device is offline — showing the local fallback model.");
+      setSnapshot(simulatedWeather(city.name));
+      setCityName(city.name);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -92,7 +111,7 @@ export default function Weather() {
     } finally {
       setLoading(false);
     }
-  }, [setCityName]);
+  }, [setCityName, networkAvailable, os.quick.airplane, os.quick.wifi]);
 
   useEffect(() => {
     const city = CITIES.find((entry) => entry.name === cityName) ?? CITIES[1];
@@ -102,6 +121,11 @@ export default function Weather() {
 
   async function search() {
     if (!query.trim()) return;
+    if (!networkAvailable) {
+      setResults(CITIES.filter((city) => city.name.toLowerCase().includes(query.toLowerCase())));
+      setError("Live location search is offline — showing matching built-in cities.");
+      return;
+    }
     setSearching(true);
     setError("");
     try {

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useOS } from "@/lib/os/store";
 import { STORE_CATALOG, APP_CATEGORIES, featuredApps, APP_MAP } from "@/lib/os/registry";
 import { usePersisted } from "@/lib/os/hooks";
@@ -40,6 +40,15 @@ export default function Store({ payload }: { payload?: Record<string, unknown> }
   const [toast, setToast] = useState("");
   const [manifestError, setManifestError] = useState("");
   const importRef = useRef<HTMLInputElement>(null);
+  const installTimers = useRef<Map<string, { interval: number; finish: number }>>(new Map());
+
+  useEffect(() => () => {
+    for (const operation of installTimers.current.values()) {
+      window.clearInterval(operation.interval);
+      window.clearTimeout(operation.finish);
+    }
+    installTimers.current.clear();
+  }, []);
 
   const installedIds = useMemo(() => new Set(os.installed.map((entry) => entry.id)), [os.installed]);
   const updates = os.appUpdates;
@@ -82,8 +91,9 @@ export default function Store({ payload }: { payload?: Record<string, unknown> }
       amount = Math.min(94, amount + 6 + Math.random() * 13);
       setProgress((prev) => ({ ...prev, [pkg.app.id]: Math.round(amount) }));
     }, 180);
-    window.setTimeout(() => {
+    const finish = window.setTimeout(() => {
       window.clearInterval(timer);
+      installTimers.current.delete(pkg.app.id);
       setProgress((prev) => ({ ...prev, [pkg.app.id]: 100 }));
       os.installApp(pkg.app.id);
       ensureShortcut(pkg);
@@ -96,6 +106,21 @@ export default function Store({ payload }: { payload?: Record<string, unknown> }
         flash(`${pkg.app.name} installed. Find it in Start, search and on the desktop.`);
       }, 420);
     }, 1750);
+    installTimers.current.set(pkg.app.id, { interval: timer, finish });
+  }
+
+  function cancelInstall(pkg: StorePackage) {
+    const operation = installTimers.current.get(pkg.app.id);
+    if (!operation) return;
+    window.clearInterval(operation.interval);
+    window.clearTimeout(operation.finish);
+    installTimers.current.delete(pkg.app.id);
+    setProgress((prev) => {
+      const next = { ...prev };
+      delete next[pkg.app.id];
+      return next;
+    });
+    flash(`${pkg.app.name} installation cancelled. Nothing was installed.`);
   }
 
   function uninstall(pkg: StorePackage) {
@@ -152,9 +177,10 @@ export default function Store({ payload }: { payload?: Record<string, unknown> }
     const installing = progress[pkg.app.id];
     if (installing !== undefined) {
       return (
-        <div className={cn("flex items-center gap-2", size === "lg" ? "w-40" : "w-24")}>
+        <div className={cn("flex items-center gap-1.5", size === "lg" ? "w-44" : "w-28")}>
           <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${installing}%` }} /></div>
           <span className="text-[9px] tabular-nums text-muted-foreground">{installing}%</span>
+          {installing < 100 && <button className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-red-500" onClick={() => cancelInstall(pkg)} aria-label={`Cancel installing ${pkg.app.name}`} title="Cancel installation"><X className="size-3" /></button>}
         </div>
       );
     }

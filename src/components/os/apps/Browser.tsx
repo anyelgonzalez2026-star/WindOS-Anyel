@@ -27,6 +27,7 @@ import {
   ShieldAlert,
   Star,
   Trash2,
+  WifiOff,
   X,
 } from "lucide-react";
 
@@ -76,7 +77,23 @@ export default function Browser({ payload }: { payload?: Record<string, unknown>
   const [siteGrants, setSiteGrants] = usePersisted<Record<string, string[]>>("browser.sitePermissions.v1", {});
   const [loading, setLoading] = useState(false);
   const [bookmarkQuery, setBookmarkQuery] = useState("");
+  const [hostOnline, setHostOnline] = useState(navigator.onLine);
   const inputRef = useRef<HTMLInputElement>(null);
+  const networkAvailable = hostOnline && os.quick.wifi && !os.quick.airplane;
+
+  useEffect(() => {
+    const update = () => setHostOnline(navigator.onLine);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!networkAvailable) setLoading(false);
+  }, [networkAvailable]);
 
   useEffect(() => {
     const desired = typeof payload?.url === "string" ? payload.url : typeof payload?.query === "string" ? payload.query : null;
@@ -146,7 +163,7 @@ export default function Browser({ payload }: { payload?: Record<string, unknown>
       return;
     }
     setError("");
-    if (options.edge) attemptEdge(result.url!);
+    if (options.edge && networkAvailable) attemptEdge(result.url!);
     setTabs((prev) => prev.map((entry) => {
       if (entry.id !== id) return entry;
       const stack = options.replace && entry.index >= 0 ? [...entry.stack.slice(0, entry.index), result.url!] : [...entry.stack.slice(0, entry.index + 1), result.url!];
@@ -155,7 +172,7 @@ export default function Browser({ payload }: { payload?: Record<string, unknown>
     if (!tab.private) {
       setHistory((prev) => [{ id: `hist_${Date.now()}`, url: result.url!, title: hostOf(result.url!), at: Date.now() }, ...prev].slice(0, 250));
     }
-    setLoading(true);
+    setLoading(networkAvailable);
     setPanel(null);
   }
 
@@ -403,6 +420,16 @@ export default function Browser({ payload }: { payload?: Record<string, unknown>
                 <p className="mt-6 rounded-lg border border-border/50 bg-muted/20 p-2.5 text-[9px] leading-relaxed text-muted-foreground">
                   WindBrowser cannot control your host browser or guarantee Microsoft Edge is installed. Pressing Go attempts an external <code className="rounded bg-muted px-1">microsoft-edge:</code> handoff and always offers a normal external tab fallback. Only http and https addresses are permitted; <code className="rounded bg-muted px-1">javascript:</code> and <code className="rounded bg-muted px-1">data:</code> URLs are rejected.
                 </p>
+              </div>
+            </div>
+          ) : !networkAvailable ? (
+            <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+              <div className="max-w-sm rounded-2xl border border-border bg-card p-6 text-center">
+                <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400"><WifiOff className="size-6" /></div>
+                <p className="mt-3 text-[14px] font-semibold">You’re offline</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">{os.quick.airplane ? "Airplane mode is enabled in Quick settings." : !os.quick.wifi ? "Wi-Fi is turned off in Quick settings." : "Your host browser reports no network connection."} WindBrowser does not load the page while networking is disabled.</p>
+                <p className="mt-2 truncate rounded-lg bg-muted/50 px-2 py-1 font-mono text-[9px] text-muted-foreground">{active.url}</p>
+                <div className="mt-3 flex justify-center gap-2"><button className="rounded-md border border-border px-2.5 py-1 text-[10px] hover:bg-muted" onClick={reload}>Retry</button><button className="rounded-md bg-primary px-2.5 py-1 text-[10px] font-semibold text-primary-foreground" onClick={() => os.openApp("network")}>Open WindNetwork</button></div>
               </div>
             </div>
           ) : (

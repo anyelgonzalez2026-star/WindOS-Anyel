@@ -742,7 +742,9 @@ function moveBoard(board: Board, direction: "left" | "right" | "up" | "down"): {
   return { board: moved ? addTile(next) : next, score, moved };
 }
 
-export function Games() {
+export function Games({ windowId }: { windowId?: string }) {
+  const os = useOS();
+  const isActive = windowId ? os.activeWindowId === windowId : true;
   const [board, setBoard] = usePersisted<Board>("games.2048.board.v1", addTile(addTile(emptyBoard())));
   const [score, setScore] = usePersisted<number>("games.2048.score.v1", 0);
   const [best, setBest] = usePersisted<number>("games.2048.best.v1", 0);
@@ -773,18 +775,21 @@ export function Games() {
   }
 
   useEffect(() => {
+    if (!isActive) return;
     const handler = (event: KeyboardEvent) => {
       if (tab !== "2048") return;
+      const target = event.target as HTMLElement | null;
+      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT") return;
       const map: Record<string, "left" | "right" | "up" | "down"> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", a: "left", d: "right", w: "up", s: "down" };
       if (map[event.key]) { event.preventDefault(); doMove(map[event.key]); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board, tab]);
+  }, [board, tab, isActive]);
 
   useEffect(() => {
-    if (tab !== "snake" || !snakeRunning) return;
+    if (!isActive || tab !== "snake" || !snakeRunning) return;
     const tick = window.setInterval(() => {
       setSnake((current) => {
         const head = current[0];
@@ -815,14 +820,14 @@ export function Games() {
       });
     }, snakeSpeed);
     return () => window.clearInterval(tick);
-  }, [tab, snakeRunning, direction, food, snakeSpeed, snakeScore, setSnakeBest]);
+  }, [tab, snakeRunning, direction, food, snakeSpeed, snakeScore, setSnakeBest, isActive]);
 
   useEffect(() => {
-    if (tab !== "snake") return;
+    if (!isActive || tab !== "snake") return;
     const keys: Record<string, "up" | "down" | "left" | "right"> = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", w: "up", s: "down", a: "left", d: "right" };
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
+      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT") return;
       const next = keys[event.key];
       if (!next) return;
       event.preventDefault();
@@ -831,7 +836,7 @@ export function Games() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [tab]);
+  }, [tab, isActive]);
 
   function resetSnake() {
     setSnake([{ x: 8, y: 8 }, { x: 7, y: 8 }, { x: 6, y: 8 }]);

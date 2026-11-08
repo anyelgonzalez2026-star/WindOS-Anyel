@@ -35,6 +35,10 @@ function tx(db: IDBDatabase, mode: IDBTransactionMode) {
   return db.transaction(STORE, mode).objectStore(STORE);
 }
 
+export async function kvAvailable(): Promise<boolean> {
+  return Boolean(await openDb());
+}
+
 export async function kvGet<T>(key: string): Promise<T | null> {
   const db = await openDb();
   if (!db) return (memory.get(key) as T) ?? null;

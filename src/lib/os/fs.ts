@@ -575,6 +575,69 @@ export class VirtualFileSystem {
     return { files, folders, bytes, trashBytes };
   }
 
+  /**
+   * Rebuild and revalidate the in-memory filesystem index. This repairs orphaned
+   * parent links, parent cycles and stale file sizes without deleting content.
+   */
+  reindex(): { nodes: number; repaired: number; orphans: number; readOnly: boolean } {
+    if (this.readOnly) return { nodes: Object.keys(this.nodes).length, repaired: 0, orphans: 0, readOnly: true };
+    let repaired = 0;
+    let orphans = 0;
+    if (!this.nodes[ROOT_ID]) {
+      this.nodes[ROOT_ID] = {
+        id: ROOT_ID,
+        name: "This PC",
+        type: "folder",
+        parentId: null,
+        size: 0,
+        createdAt: now(),
+        modifiedAt: now(),
+      };
+      repaired += 1;
+    }
+    const nodeCount = Object.keys(this.nodes).length;
+    for (const node of Object.values(this.nodes)) {
+      if (node.id === ROOT_ID) {
+        if (node.parentId !== null) {
+          node.parentId = null;
+          repaired += 1;
+        }
+      } else if (!node.parentId || !this.nodes[node.parentId] || node.parentId === node.id) {
+        node.parentId = ROOT_ID;
+        repaired += 1;
+        orphans += 1;
+      }
+    }
+    for (const node of Object.values(this.nodes)) {
+      if (node.id === ROOT_ID) continue;
+      let cursor = node.parentId;
+      let steps = 0;
+      while (cursor && cursor !== ROOT_ID && steps <= nodeCount) {
+        cursor = this.nodes[cursor]?.parentId ?? null;
+        steps += 1;
+      }
+      if ((cursor === node.id && steps > 0) || steps > nodeCount) {
+        node.parentId = ROOT_ID;
+        repaired += 1;
+        orphans += 1;
+      }
+      if (node.type === "folder") {
+        if (node.size !== 0) {
+          node.size = 0;
+          repaired += 1;
+        }
+      } else {
+        const actual = node.content?.length ?? 0;
+        if (node.size !== actual) {
+          node.size = actual;
+          repaired += 1;
+        }
+      }
+    }
+    this.emit();
+    return { nodes: Object.keys(this.nodes).length, repaired, orphans, readOnly: false };
+  }
+
   exportTree(): SerializedFS {
     return this.serialize();
   }

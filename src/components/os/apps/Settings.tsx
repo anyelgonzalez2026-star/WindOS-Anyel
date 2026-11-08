@@ -48,6 +48,8 @@ import {
   Wifi,
 } from "lucide-react";
 
+const VIRTUAL_CAPACITY_BYTES = 512 * 1024 * 1024;
+
 type SectionId =
   | "system" | "display" | "sound" | "power" | "storage" | "personalization" | "taskbar" | "startup"
   | "installed" | "defaults" | "notifications" | "permissions" | "privacy" | "accessibility" | "updates" | "reset" | "about";
@@ -179,6 +181,18 @@ export default function Settings({ payload }: { payload?: Record<string, unknown
 
   const groups = [...new Set(filtered.map((item) => item.group))];
   const usage = os.fs.usage();
+  const storageRatio = usage.bytes / VIRTUAL_CAPACITY_BYTES;
+  const largeFiles = useMemo(
+    () => Object.values(os.fs.nodes)
+      .filter((node) => node.type === "file" && !node.trashed)
+      .sort((a, b) => b.size - a.size)
+      .slice(0, 5),
+    // fsVersion changes whenever nodes are created, changed or removed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [os.fsVersion],
+  );
+  const backupAgeDays = os.lastBackupAt ? Math.floor((Date.now() - os.lastBackupAt) / 86_400_000) : null;
+  const backupStale = backupAgeDays === null || backupAgeDays > 7;
   const appsInstalled = os.installed.length;
   const currentWallpaper = WALLPAPERS.find((item) => item.id === os.settings.wallpaper);
   const appUpdates = os.appUpdates;
@@ -373,9 +387,10 @@ export default function Settings({ payload }: { payload?: Record<string, unknown
                   <span className="text-[10px] text-muted-foreground">{usage.files} files · {usage.folders} folders</span>
                 </div>
                 <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, (usage.bytes / (1024 * 1024 * 1024)) * 100)}%` }} />
+                  <div className={cn("h-full rounded-full", storageRatio >= 0.9 ? "bg-amber-500" : "bg-primary")} style={{ width: `${Math.min(100, storageRatio * 100)}%` }} />
                 </div>
-                <p className="mt-1 text-[9px] text-muted-foreground">Virtual disk capacity 1 GB. Browser origin quota: {formatBytes(os.storage.quota)} ({formatBytes(os.storage.usage)} used).</p>
+                <p className="mt-1 text-[9px] text-muted-foreground">Virtual disk capacity 512 MB. Browser origin quota: {formatBytes(os.storage.quota)} ({formatBytes(os.storage.usage)} used). Recycle Bin: {formatBytes(usage.trashBytes)}.</p>
+                {storageRatio >= 0.9 && <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[9px] text-amber-700 dark:text-amber-300">The virtual drive is above 90% capacity. Empty the Recycle Bin or export large files before adding more data.</p>}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {os.fs.children(null).filter((node) => node.type === "folder").slice(0, 6).map((folder) => {
@@ -385,13 +400,24 @@ export default function Settings({ payload }: { payload?: Record<string, unknown
                     <button key={folder.id} className="rounded-lg border border-border/70 bg-card p-2.5 text-left hover:bg-muted/40" onClick={() => os.openApp("files", { openId: folder.id })}>
                       <p className="truncate text-[10.5px] font-medium">{folder.name}</p>
                       <p className="text-[9px] text-muted-foreground">{formatBytes(bytes)} · {files.length} files</p>
+                      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, (bytes / Math.max(1, usage.bytes)) * 100)}%` }} /></div>
                     </button>
                   );
                 })}
               </div>
               <div className="overflow-hidden rounded-xl border border-border/70 bg-card">
-                <Row icon={Trash2} title="Recycle Bin" body={`${os.fs.allTrash().length} items awaiting permanent deletion`}>
+                <Row icon={Database} title="Persistence status" body={os.fsPersistent ? "IndexedDB writes are active; files survive reloads in this browser" : "IndexedDB write failed — changes may not survive a reload"}>
+                  <span className={cn("text-[9.5px] font-medium", os.fsPersistent ? "text-emerald-600 dark:text-emerald-400" : "text-red-500")}>{os.fsPersistent ? "active" : "unavailable"}</span>
+                </Row>
+                <div className="border-b border-border/40 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2"><p className="text-[10.5px] font-medium">Largest files</p><button className="text-[9px] text-primary hover:underline" onClick={() => os.openApp("files", { openId: "folder_documents" })}>Browse files</button></div>
+                  {largeFiles.length === 0 ? <p className="mt-1 text-[9px] text-muted-foreground">No files on the drive yet.</p> : <div className="mt-1.5 space-y-1">{largeFiles.map((file) => <button key={file.id} className="flex w-full items-center gap-2 rounded px-1 py-1 text-left hover:bg-muted/50" onClick={() => os.openApp("files", { openId: file.id })}><span className="min-w-0 flex-1 truncate text-[9.5px]">{file.name}</span><span className="text-[8.5px] tabular-nums text-muted-foreground">{formatBytes(file.size)}</span></button>)}</div>}
+                </div>
+                <Row icon={Trash2} title="Recycle Bin" body={`${os.fs.allTrash().length} items · ${formatBytes(usage.trashBytes)} awaiting permanent deletion`}>
                   <button className="text-[10px] text-red-500 hover:underline" onClick={() => { const count = os.fs.emptyTrash(); flash(`${count} items permanently deleted.`); }}>Empty</button>
+                </Row>
+                <Row icon={Database} title="Backup health" body={backupAgeDays === null ? "No backup has been created yet" : backupAgeDays === 0 ? "Backed up today" : `Last backup was ${backupAgeDays} day${backupAgeDays === 1 ? "" : "s"} ago`}>
+                  <button className={cn("text-[10px] hover:underline", backupStale ? "text-amber-600 dark:text-amber-400" : "text-primary")} onClick={() => os.openApp("backup")}>{backupStale ? "Back up now" : "Open WindBackup"}</button>
                 </Row>
                 <Row icon={Download} title="Export a file" body="Choose a file to download from the virtual drive">
                   <button className="text-[10px] text-primary hover:underline" onClick={() => { const file = os.fs.recent(10).find((node) => node.type === "file" && node.content); if (file) { downloadText(file.content ?? "", file.name, file.mime); flash(`Exported ${file.name}`); } else flash("No text file available to export."); }}>Export recent file</button>
@@ -738,7 +764,7 @@ export default function Settings({ payload }: { payload?: Record<string, unknown
                     <option value="stable">Stable</option><option value="fast">Fast</option><option value="developer">Developer</option>
                   </select>
                 </Row>
-                <Row icon={RefreshCw} title="Automatic app updates" body="Install available package updates after boot"><Toggle checked={os.settings.autoUpdates} onChange={(autoUpdates) => os.updateSettings({ autoUpdates })} label="Automatic updates" /></Row>
+                <Row icon={RefreshCw} title="Automatic update checks" body="Notify after boot when local packages are behind; applying updates stays manual"><Toggle checked={os.settings.autoUpdates} onChange={(autoUpdates) => os.updateSettings({ autoUpdates })} label="Automatic update checks" /></Row>
                 <Row icon={AppWindow} title="Application updates" body={`${appUpdates.length} package updates available`}>
                   <button className="text-[10px] text-primary hover:underline" onClick={() => setSection("installed")}>Review</button>
                 </Row>

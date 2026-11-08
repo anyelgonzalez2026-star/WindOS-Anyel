@@ -1,10 +1,10 @@
-import type { ReactNode } from "react";
+import type { KeyboardEventHandler, ReactNode, Ref } from "react";
 import { cn } from "@/lib/utils";
 import { Search } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
-export function AppShell({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn("flex h-full min-h-0 flex-col bg-background text-foreground", className)}>{children}</div>;
+export function AppShell({ children, className, containerRef, onKeyDown }: { children: ReactNode; className?: string; containerRef?: Ref<HTMLDivElement>; onKeyDown?: KeyboardEventHandler<HTMLDivElement> }) {
+  return <div ref={containerRef} onKeyDown={onKeyDown} className={cn("flex h-full min-h-0 flex-col bg-background text-foreground", className)}>{children}</div>;
 }
 
 export function AppHeader({

@@ -1,6 +1,8 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useOS } from "@/lib/os/store";
-import { formatBytes } from "@/lib/os/fs";
+import { formatBytes, SEED_FOLDERS } from "@/lib/os/fs";
+import { checksum } from "@/lib/os/db";
+import type { FSNode } from "@/lib/os/types";
 import { downloadText } from "@/lib/os/zip";
 import { cn } from "@/lib/utils";
 import { AppShell, AppHeader, AppToolbar, GhostButton, Panel, PrimaryButton, SectionTitle, Pill } from "./ui";
@@ -10,7 +12,8 @@ export default function Backup() {
   const os = useOS();
   const [tab, setTab] = useState<"export" | "import" | "restore">("export");
   const [options, setOptions] = useState({ settings: true, files: true, apps: true, clipboard: false });
-  const [lastExport, setLastExport] = useState<{ at: number; bytes: number; name: string } | null>(null);
+  const [lastExport, setLastExport] = useState<{ at: number; bytes: number; name: string; saved: boolean } | null>(null);
+  const [verified, setVerified] = useState<Record<string, "ok" | "failed">>({});
   const [preview, setPreview] = useState<{ name: string; json: string; product?: string; version?: string; createdAt?: number; files?: number; checksum?: string; error?: string } | null>(null);
   const [mode, setMode] = useState<"merge" | "replace">("merge");
   const [label, setLabel] = useState("");
@@ -18,24 +21,71 @@ export default function Backup() {
   const [confirmImport, setConfirmImport] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const usage = os.fs.usage();
+  const backupOptions = {
+    includeSettings: options.settings,
+    includeFiles: options.files,
+    includeApps: options.apps,
+    includeClipboard: options.clipboard,
+  };
+  const estimatedBytes = useMemo(
+    () => new Blob([os.buildBackup({
+      includeSettings: options.settings,
+      includeFiles: options.files,
+      includeApps: options.apps,
+      includeClipboard: options.clipboard,
+    }, false)]).size,
+    // fsVersion covers the tree; the remaining inputs are the visible options.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [options.settings, options.files, options.apps, options.clipboard, os.fsVersion, os.installed.length, os.clipboard.length],
+  );
+  const savedArchives = useMemo(
+    () => Object.values(os.fs.nodes)
+      .filter((node): node is FSNode => node.type === "file" && node.parentId === SEED_FOLDERS.backups && !node.trashed)
+      .sort((a, b) => b.modifiedAt - a.modifiedAt),
+    // fsVersion changes whenever the drive changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [os.fsVersion],
+  );
+  const backupAgeDays = os.lastBackupAt ? Math.floor((Date.now() - os.lastBackupAt) / 86_400_000) : null;
+  const backupStale = backupAgeDays === null || backupAgeDays > 7;
 
   function flash(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(""), 2800);
   }
 
-  function createBackup() {
-    const json = os.buildBackup({
-      includeSettings: options.settings,
-      includeFiles: options.files,
-      includeApps: options.apps,
-      includeClipboard: options.clipboard,
-    });
+  function createBackup(download: boolean) {
+    const json = os.buildBackup(backupOptions);
     const name = `windos-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
-    downloadText(json, name, "application/json");
-    setLastExport({ at: Date.now(), bytes: new Blob([json]).size, name });
-    os.logEvent({ level: "info", title: "Backup created", detail: `Manual backup ${name} (${formatBytes(new Blob([json]).size)}).` });
-    flash("Backup downloaded and recorded.");
+    if (download) downloadText(json, name, "application/json");
+    const node = os.fs.createFile(SEED_FOLDERS.backups, name, json, "application/json");
+    setLastExport({ at: Date.now(), bytes: new Blob([json]).size, name, saved: Boolean(node) });
+    os.logEvent({ level: "info", title: "Backup created", detail: `${download ? "Downloaded" : "Saved"} backup ${name} (${formatBytes(new Blob([json]).size)})${node ? " and archived in Data (D:)/Backups" : ""}.` });
+    flash(node ? `${download ? "Backup downloaded and" : "Backup"} saved to Data (D:)/Backups.` : "Backup generated, but the virtual drive is read-only; only the download is available.");
+  }
+
+  function verifyArchive(node: FSNode) {
+    try {
+      const parsed = JSON.parse(node.content ?? "") as { product?: string; checksum?: string; data?: unknown };
+      if (parsed.product !== "WindOS" || !parsed.checksum || !parsed.data) throw new Error("Missing WindOS backup fields.");
+      const actual = checksum(JSON.stringify(parsed.data));
+      if (actual !== parsed.checksum) throw new Error("Checksum mismatch — archive is damaged or edited.");
+      setVerified((prev) => ({ ...prev, [node.id]: "ok" }));
+      flash(`${node.name} passed checksum verification.`);
+    } catch (error) {
+      setVerified((prev) => ({ ...prev, [node.id]: "failed" }));
+      flash(`${node.name} failed verification: ${error instanceof Error ? error.message : "invalid archive"}`);
+    }
+  }
+
+  function deleteArchive(node: FSNode) {
+    os.fs.trash(node.id);
+    setVerified((prev) => {
+      const next = { ...prev };
+      delete next[node.id];
+      return next;
+    });
+    flash(`${node.name} moved to the Recycle Bin.`);
   }
 
   function readFile(file: File | undefined) {
@@ -102,6 +152,12 @@ export default function Backup() {
 
         {tab === "export" && (
           <div className="mx-auto max-w-2xl space-y-3">
+            {backupStale && (
+              <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-[9.5px] text-amber-800 dark:text-amber-200">
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                <span>{backupAgeDays === null ? "No backup has been created in this profile yet." : `The last backup was ${backupAgeDays} days ago.`} A portable archive is the only protection against cleared browser data.</span>
+              </div>
+            )}
             <div className="rounded-xl border border-border/70 bg-gradient-to-br from-primary/8 to-card p-4">
               <div className="flex items-center gap-3">
                 <div className="flex size-10 items-center justify-center rounded-xl bg-primary/12 text-primary"><Archive className="size-5" /></div>
@@ -123,9 +179,9 @@ export default function Backup() {
                   </label>
                 ))}
               </div>
-              <div className="mt-3 flex items-center justify-between gap-2">
-                <span className="text-[9px] text-muted-foreground">Permissions, quick settings and desktops are always included.</span>
-                <PrimaryButton onClick={createBackup}><Download className="size-3.5" /> Download backup</PrimaryButton>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[9px] text-muted-foreground">Permissions, quick settings and desktops are always included. Estimated archive: <strong className="font-medium text-foreground">{formatBytes(estimatedBytes)}</strong>.</span>
+                <div className="flex gap-1.5"><GhostButton onClick={() => createBackup(false)}><HardDrive className="size-3.5" /> Save to D:</GhostButton><PrimaryButton onClick={() => createBackup(true)}><Download className="size-3.5" /> Download + save</PrimaryButton></div>
               </div>
             </div>
             {lastExport && (
@@ -135,11 +191,30 @@ export default function Backup() {
                   <FileJson className="size-4 text-primary" />
                   <span className="flex-1 truncate font-medium">{lastExport.name}</span>
                   <span className="text-muted-foreground">{formatBytes(lastExport.bytes)}</span>
-                  <Pill tone="success">verified</Pill>
+                  <Pill tone={lastExport.saved ? "success" : "warning"}>{lastExport.saved ? "archived" : "download only"}</Pill>
                 </div>
-                <p className="mt-1 text-[9px] text-muted-foreground">Downloaded {new Date(lastExport.at).toLocaleString()}. Keep this file somewhere other than the WindOS drive.</p>
+                <p className="mt-1 text-[9px] text-muted-foreground">Created {new Date(lastExport.at).toLocaleString()}. Keep a copy somewhere other than the WindOS drive.</p>
               </Panel>
             )}
+            <Panel>
+              <SectionTitle action={<span className="text-[8px] text-muted-foreground">{savedArchives.length} on drive</span>}>Stored in Data (D:)/Backups</SectionTitle>
+              {savedArchives.length === 0 ? (
+                <p className="text-[9px] text-muted-foreground">No archive is stored on the virtual drive. “Save to D:” keeps a copy here; “Download + save” also downloads it.</p>
+              ) : (
+                <div className="space-y-1">
+                  {savedArchives.map((node) => (
+                    <div key={node.id} className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border/60 px-2 py-1.5">
+                      <FileJson className="size-3.5 shrink-0 text-primary" />
+                      <div className="min-w-0 flex-1"><p className="truncate text-[9.5px] font-medium">{node.name}</p><p className="text-[8px] text-muted-foreground">{new Date(node.modifiedAt).toLocaleString()} · {formatBytes(node.size)}</p></div>
+                      {verified[node.id] && <Pill tone={verified[node.id] === "ok" ? "success" : "danger"}>{verified[node.id] === "ok" ? "verified" : "failed"}</Pill>}
+                      <button className="rounded border border-border px-1.5 py-0.5 text-[8.5px] hover:bg-muted" onClick={() => verifyArchive(node)}><ShieldCheck className="mr-1 inline size-2.5" /> Verify</button>
+                      <button className="rounded border border-border px-1.5 py-0.5 text-[8.5px] text-red-500 hover:bg-red-500/10" onClick={() => deleteArchive(node)}><Trash2 className="mr-1 inline size-2.5" /> Delete</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="mt-1.5 text-[8px] leading-relaxed text-muted-foreground">Verification recomputes the archive checksum locally. Deleting moves the archive to the Recycle Bin, where it still occupies space until the bin is emptied.</p>
+            </Panel>
             <Panel>
               <SectionTitle>Backup integrity</SectionTitle>
               <div className="space-y-1 text-[9.5px] text-muted-foreground">

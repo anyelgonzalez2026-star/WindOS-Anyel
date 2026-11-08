@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useOS } from "@/lib/os/store";
+import { usePersisted } from "@/lib/os/hooks";
 import { formatBytes } from "@/lib/os/fs";
-import { downloadBlob } from "@/lib/os/zip";
+import { downloadBlob, downloadText } from "@/lib/os/zip";
 import { cn } from "@/lib/utils";
 import { AppShell, AppHeader, AppToolbar, EmptyState, GhostButton, PrimaryButton, SearchInput, inputClass, Panel, SectionTitle, Pill } from "./ui";
 import { Activity, ArrowRight, Camera, Check, ClipboardCopy, Copy, Download, FolderOpen, Globe2, Link2, Lock, Monitor, Network as NetworkIcon, Play, Radio, RefreshCw, ScreenShare, Send, Share2, Shield, Signal, Square, Trash2, Upload, Users, Video, Wifi, WifiOff, X, Zap } from "lucide-react";
@@ -25,10 +26,65 @@ export function Network() {
   const [selected, setSelected] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [hostOnline, setHostOnline] = useState(navigator.onLine);
+  const [proxy, setProxy] = usePersisted<string>("network.proxy.v1", "");
+  const [firewall, setFirewall] = useState({ inbound: true, outbound: true });
+  const [throughput, setThroughput] = useState<number[]>(() => Array.from({ length: 24 }, () => 18 + Math.random() * 62));
+  const [simulatedTransferMb, setSimulatedTransferMb] = useState(0);
   const connection = (navigator as Navigator & { connection?: ConnectionDetails }).connection;
-  const online = navigator.onLine && os.quick.wifi && !os.quick.airplane;
+  const online = hostOnline && os.quick.wifi && !os.quick.airplane;
+
+  useEffect(() => {
+    const update = () => setHostOnline(navigator.onLine);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const sample = online ? 18 + Math.random() * 62 : 0;
+      setThroughput((previous) => [...previous.slice(1), sample]);
+      if (online) setSimulatedTransferMb((previous) => previous + (sample * 0.018));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [online]);
+
+  function exportDiagnostics() {
+    const report = {
+      product: "WindOS",
+      version: "1.0.0",
+      generatedAt: new Date().toISOString(),
+      host: { online: hostOnline, effectiveType: connection?.effectiveType ?? null, downlinkMbps: connection?.downlink ?? null, rttMs: connection?.rtt ?? null, saveData: connection?.saveData ?? false, userAgent: navigator.userAgent },
+      windos: { airplane: os.quick.airplane, wifi: os.quick.wifi, connectedNetwork: connected, proxy, firewall, simulatedTransferMb: Number(simulatedTransferMb.toFixed(2)), throughput: throughput.map((value) => Number(value.toFixed(1))) },
+      adapters: [
+        { name: "Wi-Fi 6 adapter", type: "wireless", state: os.quick.wifi ? (online ? "connected" : "disconnected") : "disabled", simulated: true },
+        { name: "Ethernet adapter", type: "wired", state: "not exposed by browser", simulated: true },
+        { name: "WindOS loopback", type: "virtual", state: "available", simulated: true },
+      ],
+      note: "Adapter inventory, throughput and transfer totals are simulated. Online state, effective type and latency are read from the browser where available.",
+    };
+    downloadText(JSON.stringify(report, null, 2), `windos-network-report-${new Date().toISOString().slice(0, 10)}.json`, "application/json");
+    os.logEvent({ level: "info", title: "Network report exported", detail: "A structured connection report was generated locally." });
+  }
 
   async function runTest() {
+    if (!online) {
+      setTest({
+        at: Date.now(),
+        ok: false,
+        ms: 0,
+        detail: os.quick.airplane
+          ? "Blocked by WindOS Airplane mode. Turn it off in Quick settings before testing."
+          : !os.quick.wifi
+            ? "Wi-Fi is disabled in WindOS Quick settings. Enable it before testing."
+            : "Your browser reports that the host device is offline. WindOS respects the real online state.",
+      });
+      return;
+    }
     setTesting(true);
     const started = performance.now();
     try {
@@ -46,6 +102,10 @@ export function Network() {
   function connect(name: string) {
     const network = WIFI.find((entry) => entry.name === name);
     if (!network) return;
+    if (!online) {
+      setError(os.quick.airplane ? "Airplane mode blocks network connections." : !os.quick.wifi ? "Wi-Fi is turned off." : "The host device is offline.");
+      return;
+    }
     if (network.secure) { setSelected(name); setPassword(""); setError(""); return; }
     setConnected(name);
     os.logEvent({ level: "info", title: "Network connected", detail: `Joined simulated network ${name}.` });
@@ -91,10 +151,41 @@ export function Network() {
             {selected && (
               <div className="mt-2 rounded-lg border border-border/60 bg-muted/20 p-2">
                 <p className="text-[9.5px] font-medium">Connect to {selected}</p>
-                <div className="mt-1 flex gap-1"><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password (simulated)" className={cn(inputClass, "h-7 text-[10px]")} /><PrimaryButton className="h-7" onClick={() => { if (password.length < 4) { setError("Enter at least 4 characters. This is a simulated credential check."); return; } setConnected(selected); setSelected(null); setError(""); }}>Join</PrimaryButton><GhostButton className="h-7" onClick={() => setSelected(null)}>Cancel</GhostButton></div>
+                <div className="mt-1 flex gap-1"><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password (simulated)" className={cn(inputClass, "h-7 text-[10px]")} /><PrimaryButton className="h-7" onClick={() => { if (!online) { setError("Networking is disabled; join is blocked until it is restored."); return; } if (password.length < 4) { setError("Enter at least 4 characters. This is a simulated credential check."); return; } setConnected(selected); setSelected(null); setError(""); }}>Join</PrimaryButton><GhostButton className="h-7" onClick={() => setSelected(null)}>Cancel</GhostButton></div>
                 {error && <p className="mt-1 text-[8.5px] text-red-500">{error}</p>}
               </div>
             )}
+          </Panel>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Panel>
+              <SectionTitle action={<Pill>simulated</Pill>}>Adapter inventory</SectionTitle>
+              <div className="space-y-1 text-[9px]">
+                {[
+                  { name: "Wi-Fi 6 adapter", type: "Wireless", state: os.quick.wifi ? (online ? "connected" : "no route") : "disabled" },
+                  { name: "Ethernet adapter", type: "Wired", state: "not exposed" },
+                  { name: "WindOS loopback", type: "Virtual", state: "available" },
+                ].map((adapter) => <div key={adapter.name} className="flex items-center gap-2 rounded border border-border/50 px-2 py-1"><NetworkIcon className="size-3 text-muted-foreground" /><span className="flex-1">{adapter.name}<span className="ml-1 text-[8px] text-muted-foreground">{adapter.type}</span></span><span className={cn("text-[8.5px]", adapter.state === "connected" || adapter.state === "available" ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>{adapter.state}</span></div>)}
+              </div>
+              <p className="mt-1.5 text-[8px] leading-relaxed text-muted-foreground">Browsers do not expose hardware adapter names. This inventory is simulated; the online state and effective connection type above are real.</p>
+            </Panel>
+            <Panel>
+              <SectionTitle>Session tools</SectionTitle>
+              <label className="block text-[8.5px] text-muted-foreground">Manual proxy preference<input value={proxy} onChange={(event) => setProxy(event.target.value)} placeholder="e.g. http://proxy.local:8080" className={cn(inputClass, "mt-1 h-6 text-[9px]")} /></label>
+              <p className="mt-0.5 text-[7.5px] text-muted-foreground">Stored locally. A web page cannot make the browser use a proxy.</p>
+              <div className="mt-2 grid grid-cols-2 gap-1">
+                <label className="flex items-center gap-1.5 rounded border border-border/50 px-1.5 py-1 text-[8.5px]"><input type="checkbox" checked={firewall.inbound} onChange={(event) => setFirewall({ ...firewall, inbound: event.target.checked })} className="accent-[var(--os-accent)]" /> Inbound block</label>
+                <label className="flex items-center gap-1.5 rounded border border-border/50 px-1.5 py-1 text-[8.5px]"><input type="checkbox" checked={firewall.outbound} onChange={(event) => setFirewall({ ...firewall, outbound: event.target.checked })} className="accent-[var(--os-accent)]" /> Outbound block</label>
+              </div>
+              <p className="mt-1 text-[7.5px] text-muted-foreground">Firewall rules are simulated and do not affect host traffic.</p>
+              <GhostButton className="mt-1.5 h-6 text-[8px]" onClick={exportDiagnostics}><Download className="size-2.5" /> Export diagnostics</GhostButton>
+            </Panel>
+          </div>
+          <Panel>
+            <SectionTitle action={<span className="text-[8px] text-muted-foreground">simulated · {simulatedTransferMb.toFixed(1)} MB this session</span>}>Throughput monitor</SectionTitle>
+            <div className="flex h-14 items-end gap-0.5 rounded-lg border border-border/50 bg-muted/10 px-2 py-1.5">
+              {throughput.map((value, index) => <div key={index} className="min-w-0 flex-1 rounded-t bg-primary/55" style={{ height: `${Math.max(3, value)}%` }} title={`${value.toFixed(1)} Mb/s (simulated)`} />)}
+            </div>
+            <p className="mt-1 text-[8px] leading-relaxed text-muted-foreground">The graph and transfer estimate update every second while WindNetwork is open. They are simulated and are not measured host traffic.</p>
           </Panel>
           <div className="grid gap-2 sm:grid-cols-2">
             <Panel><SectionTitle>Quick settings</SectionTitle><div className="space-y-1.5">{([["wifi", "Wi-Fi"], ["airplane", "Airplane mode"], ["mobileHotspot", "Mobile hotspot"], ["nearbySharing", "Nearby sharing"]] as const).map(([key, label]) => (

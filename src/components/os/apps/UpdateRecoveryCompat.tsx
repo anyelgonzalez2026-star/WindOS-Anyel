@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOS } from "@/lib/os/store";
 import { usePersisted } from "@/lib/os/hooks";
 import { APPS, APP_MAP } from "@/lib/os/registry";
+import { FEATURE_STATS } from "@/lib/os/features";
 import { formatBytes } from "@/lib/os/fs";
 import { downloadText } from "@/lib/os/zip";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,9 @@ export function Update() {
   const [checkedAt, setCheckedAt] = useState(0);
   const [restoreLabel, setRestoreLabel] = useState("");
   const [created, setCreated] = useState("");
+  const [lastUpdatePoint, setLastUpdatePoint] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [installingAll, setInstallingAll] = useState(false);
   const updates = os.appUpdates;
   const updateHistory = os.securityEvents.filter((event) => /update/i.test(event.title));
   const installed = [...os.installed].sort((a, b) => (APP_MAP.get(a.id)?.name ?? a.id).localeCompare(APP_MAP.get(b.id)?.name ?? b.id));
@@ -27,6 +31,34 @@ export function Update() {
     setChecking(false);
     os.notify({ appId: "WindOS", title: updates.length ? `${updates.length} app updates available` : "No app updates available", body: updates.length ? "Review them below. Packages are local and no download is required." : "All installed packages match the local catalogue versions." });
     os.logEvent({ level: "info", title: "Update check", detail: updates.length ? `${updates.length} package updates found in the local catalogue.` : "No package updates found." });
+  }
+
+  async function updateOne(app: (typeof updates)[number]["app"]) {
+    if (updatingId || installingAll) return;
+    setUpdatingId(app.id);
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+    const point = os.createRestorePoint(`Before ${app.name} ${app.version}`, "update");
+    os.updateApp(app.id);
+    setLastUpdatePoint(point.id);
+    setCreated(`${app.name} updated to ${app.version}. A pre-update restore point is available below.`);
+    setUpdatingId(null);
+  }
+
+  async function installAll() {
+    if (installingAll || updatingId) return;
+    setInstallingAll(true);
+    await new Promise((resolve) => window.setTimeout(resolve, 650));
+    const point = os.applyAllUpdates();
+    if (point) setLastUpdatePoint(point.id);
+    setCreated("All local package updates were applied. A restore point was created first.");
+    setInstallingAll(false);
+  }
+
+  function rollbackLastUpdate() {
+    if (!lastUpdatePoint) return;
+    const ok = os.applyRestorePoint(lastUpdatePoint, "full");
+    setCreated(ok ? "Rolled back to the pre-update restore point." : "Rollback failed: the pre-update restore point could not be verified.");
+    if (ok) setLastUpdatePoint(null);
   }
 
   return (
@@ -46,7 +78,7 @@ export function Update() {
           </div>
 
           <Panel>
-            <SectionTitle action={updates.length > 0 ? <PrimaryButton className="h-6 text-[9px]" onClick={() => { os.applyAllUpdates(); setCreated("Updates applied. A restore point was created automatically."); }}><Wand2 className="size-3" /> Install all</PrimaryButton> : undefined}>Available package updates</SectionTitle>
+            <SectionTitle action={updates.length > 0 ? <PrimaryButton className="h-6 text-[9px]" disabled={installingAll || updatingId !== null} onClick={() => void installAll()}><Wand2 className="size-3" /> {installingAll ? "Installing…" : "Install all"}</PrimaryButton> : undefined}>Available package updates</SectionTitle>
             {updates.length === 0 ? (
               <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-2"><p className="flex items-center gap-1.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"><CheckCircle2 className="size-3.5" /> Everything is current</p><p className="mt-0.5 text-[8.5px] text-muted-foreground">Every installed package matches the version in the built-in catalogue.</p></div>
             ) : (
@@ -55,7 +87,7 @@ export function Update() {
                   <div key={app.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 px-2 py-1.5">
                     <app.icon className="size-4 shrink-0" style={{ color: app.color }} />
                     <div className="min-w-0 flex-1"><p className="text-[9.5px] font-medium">{app.name}</p><p className="text-[8px] text-muted-foreground">{from} → {app.version} · publisher {app.publisher}</p></div>
-                    <button className="rounded border border-primary/30 bg-primary/8 px-2 py-0.5 text-[8.5px] font-medium text-primary hover:bg-primary/15" onClick={() => { os.updateApp(app.id); setCreated(`${app.name} updated to ${app.version}.`); }}>Update</button>
+                    <button className="rounded border border-primary/30 bg-primary/8 px-2 py-0.5 text-[8.5px] font-medium text-primary hover:bg-primary/15 disabled:opacity-50" disabled={installingAll || updatingId !== null} onClick={() => void updateOne(app)}>{updatingId === app.id ? "Updating…" : "Update"}</button>
                   </div>
                 ))}
               </div>
@@ -68,14 +100,15 @@ export function Update() {
               <SectionTitle>Update settings</SectionTitle>
               <Field label="Channel"><select value={os.settings.updateChannel} onChange={(event) => os.updateSettings({ updateChannel: event.target.value as "stable" | "fast" | "developer" })} className={inputClass}><option value="stable">Stable — recommended</option><option value="fast">Fast — earlier builds</option><option value="developer">Developer — experimental</option></select></Field>
               <p className="mt-1 text-[8px] text-muted-foreground">{os.settings.updateChannel === "stable" ? "Stable packages only." : os.settings.updateChannel === "fast" ? "Fast channel preference is recorded; this build still uses the local stable catalogue." : "Developer channel enables developer settings. Updates remain local packages."}</p>
-              <label className="mt-2 flex items-center gap-2 text-[9px]"><input type="checkbox" checked={os.settings.autoUpdates} onChange={(event) => os.updateSettings({ autoUpdates: event.target.checked })} className="accent-[var(--os-accent)]" /> Install app updates automatically</label>
-              <p className="mt-0.5 text-[8px] text-muted-foreground">Auto-update stores the preference; applying updates always requires the actions above in this build.</p>
+              <label className="mt-2 flex items-center gap-2 text-[9px]"><input type="checkbox" checked={os.settings.autoUpdates} onChange={(event) => os.updateSettings({ autoUpdates: event.target.checked })} className="accent-[var(--os-accent)]" /> Check for app updates automatically</label>
+              <p className="mt-0.5 text-[8px] text-muted-foreground">Automatic checks notify after boot when local packages are behind. Applying updates always remains a manual action in this build.</p>
             </Panel>
             <Panel>
               <SectionTitle>Create a checkpoint</SectionTitle>
               <p className="text-[8.5px] leading-relaxed text-muted-foreground">Take a restore point before changing packages. It captures settings, files, grants and app state locally.</p>
               <div className="mt-1.5 flex gap-1"><input value={restoreLabel} onChange={(event) => setRestoreLabel(event.target.value)} placeholder="Before update" className={cn(inputClass, "h-7 text-[9.5px]")} /><PrimaryButton className="h-7" onClick={() => { const point = os.createRestorePoint(restoreLabel.trim() || "Before updates"); setRestoreLabel(""); setCreated(`${point.label} created.`); }}><Save className="size-3" /> Create</PrimaryButton></div>
               {created && <p className="mt-1 text-[8.5px] text-primary">{created}</p>}
+              {lastUpdatePoint && <div className="mt-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-2"><p className="text-[8.5px] font-medium text-emerald-700 dark:text-emerald-300">Pre-update rollback point ready</p><p className="mt-0.5 text-[8px] text-muted-foreground">This checkpoint was created before the latest update. Rolling back also restores files and settings captured at that moment.</p><GhostButton className="mt-1.5 h-6 text-[8px]" onClick={rollbackLastUpdate}><RotateCcw className="size-2.5" /> Undo latest update</GhostButton></div>}
               <button className="mt-1 text-[8.5px] text-primary hover:underline" onClick={() => os.openApp("recovery")}>Open WindRecovery</button>
             </Panel>
           </div>
@@ -111,7 +144,29 @@ export function Recovery() {
   const [scan, setScan] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [recoveryConfirm, setRecoveryConfirm] = useState(false);
+  const [persisted, setPersisted] = useState<boolean | null>(null);
   const usage = os.fs.usage();
+  const recoveryEvents = os.securityEvents.filter((event) => /restore|recovery|safe mode|integrity|reset|rebuild|scan/i.test(`${event.title} ${event.detail}`)).slice(0, 6);
+
+  useEffect(() => {
+    let active = true;
+    void navigator.storage?.persisted?.().then((value) => { if (active) setPersisted(value); }).catch(() => { if (active) setPersisted(null); });
+    return () => { active = false; };
+  }, []);
+
+  function exportBeforeReset() {
+    const json = os.buildBackup({ includeSettings: true, includeFiles: true, includeApps: true, includeClipboard: true });
+    const name = `windos-pre-reset-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+    downloadText(json, name, "application/json");
+    setNotice(`Pre-reset backup ${name} downloaded.`);
+    os.logEvent({ level: "info", title: "Pre-reset export", detail: `${name} was downloaded before a potential factory reset.` });
+  }
+
+  function rebuildIndex() {
+    const result = os.fs.reindex();
+    setNotice(result.readOnly ? "The drive is read-only in this session, so its index was not changed." : `Index rebuilt: ${result.nodes} nodes checked, ${result.repaired} repaired, ${result.orphans} orphan${result.orphans === 1 ? "" : "s"} reattached.`);
+    os.logEvent({ level: result.repaired ? "warning" : "info", title: "Filesystem index rebuilt", detail: `${result.nodes} nodes checked; ${result.repaired} repairs applied.` });
+  }
 
   function runScan() {
     const issues: string[] = [];
@@ -132,8 +187,28 @@ export function Recovery() {
       }
     }
     walk(null, 0);
+    if (!os.settings || typeof os.settings !== "object") issues.push("Settings record is missing or malformed.");
+    if (FEATURE_STATS.total !== 640 || FEATURE_STATS.categories !== 40) issues.push(`Feature registry expected 640/40, found ${FEATURE_STATS.total}/${FEATURE_STATS.categories}.`);
+    if (os.installed.length === 0) issues.push("No installed packages were found in the registry.");
     const trash = os.fs.allTrash();
-    const result = [`WindOS integrity scan`, `Run ${new Date().toISOString()}`, `Nodes checked: ${nodes}`, `Files: ${files}`, `Folders: ${nodes - files}`, `Trash items: ${trash.length}`, `Reclaimed space available: ${formatBytes(usage.trashBytes)}`, "", issues.length ? `Issues (${issues.length}):` : "No structural issues found.", ...issues.slice(0, 40)].join("\n");
+    const result = [
+      `WindOS integrity scan`,
+      `Run ${new Date().toISOString()}`,
+      `Nodes checked: ${nodes}`,
+      `Files: ${files}`,
+      `Folders: ${nodes - files}`,
+      `Trash items: ${trash.length}`,
+      `Reclaimed space available: ${formatBytes(usage.trashBytes)}`,
+      `Virtual drive: ${formatBytes(usage.bytes)} of 512 MB`,
+      `Settings: ${os.settings ? "present" : "missing"}`,
+      `Registry: ${FEATURE_STATS.total} features across ${FEATURE_STATS.categories} categories`,
+      `IndexedDB available: ${typeof indexedDB !== "undefined" ? "yes" : "no"}`,
+      `Origin quota: ${formatBytes(os.storage.quota)} (${formatBytes(os.storage.usage)} used)`,
+      `Persistent storage: ${persisted === null ? "not reported by this browser" : persisted ? "granted" : "best-effort"}`,
+      "",
+      issues.length ? `Issues (${issues.length}):` : "No structural issues found.",
+      ...issues.slice(0, 40),
+    ].join("\n");
     setScan(result);
     os.logEvent({ level: issues.length ? "warning" : "info", title: "Filesystem integrity scan", detail: issues.length ? `${issues.length} issue(s) detected.` : `${nodes} nodes verified with no structural issues.` });
   }
@@ -144,9 +219,10 @@ export function Recovery() {
     <AppShell>
       <AppHeader icon={RotateCcw} title="WindRecovery" subtitle="Restore points, safe mode, startup repair and factory reset" actions={<><GhostButton onClick={() => os.openApp("backup")}><Download className="size-3.5" /> Backup / import</GhostButton><PrimaryButton onClick={() => { const point = os.createRestorePoint(label.trim() || "Manual restore point"); setLabel(""); setNotice(`${point.label} created with ${point.fileCount} files.`); }}><Save className="size-3.5" /> Create restore point</PrimaryButton></>} />
       <AppToolbar>
-        <Pill tone="success">drive healthy</Pill>
+        <Pill tone={scan ? (scan.includes("No structural issues") ? "success" : "warning") : "neutral"}>{scan ? (scan.includes("No structural issues") ? "scan passed" : "scan found issues") : "not scanned"}</Pill>
         <span className="text-[9px] text-muted-foreground">{usage.files} files · {usage.folders} folders · {formatBytes(usage.bytes)} · {os.restorePoints.length} restore points</span>
-        <span className="ml-auto flex items-center gap-1 text-[8.5px] text-muted-foreground"><ShieldCheck className="size-3 text-emerald-500" /> checksums verified on restore</span>
+        <GhostButton className="ml-auto h-6 text-[8px]" onClick={rebuildIndex}><Database className="size-2.5" /> Rebuild index</GhostButton>
+        <span className="flex items-center gap-1 text-[8.5px] text-muted-foreground"><ShieldCheck className="size-3 text-emerald-500" /> checksums verified on restore</span>
       </AppToolbar>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <div className="mx-auto max-w-3xl space-y-2.5">
@@ -188,6 +264,22 @@ export function Recovery() {
 
           {scan && <Panel><SectionTitle action={<button className="text-[8px] text-primary" onClick={() => { const name = `Integrity scan ${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.txt`; os.fs.createFile("folder_documents", name, scan, "text/plain"); setNotice(`Saved ${name}.`); }}>Save report</button>}>Scan result</SectionTitle><pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-muted/30 p-2 text-[8px] leading-relaxed">{scan}</pre></Panel>}
 
+          <Panel>
+            <SectionTitle action={<span className="text-[8px] text-muted-foreground">{typeof indexedDB !== "undefined" ? "IndexedDB available" : "IndexedDB unavailable"}</span>}>Storage diagnostics</SectionTitle>
+            <div className="grid gap-1.5 text-[9px] sm:grid-cols-2">
+              <div className="rounded-lg border border-border/50 px-2 py-1.5"><p className="text-[8px] text-muted-foreground">Virtual drive</p><p className="font-medium">{formatBytes(usage.bytes)} / 512 MB</p></div>
+              <div className="rounded-lg border border-border/50 px-2 py-1.5"><p className="text-[8px] text-muted-foreground">Recycle Bin</p><p className="font-medium">{formatBytes(usage.trashBytes)} · {os.fs.allTrash().length} items</p></div>
+              <div className="rounded-lg border border-border/50 px-2 py-1.5"><p className="text-[8px] text-muted-foreground">Browser origin quota</p><p className="font-medium">{formatBytes(os.storage.quota)} · {formatBytes(os.storage.usage)} used</p></div>
+              <div className="rounded-lg border border-border/50 px-2 py-1.5"><p className="text-[8px] text-muted-foreground">Persistent storage request</p><p className="font-medium">{persisted === null ? "Not reported" : persisted ? "Granted by browser" : "Best-effort (not granted)"}</p></div>
+            </div>
+            <p className="mt-1.5 text-[8px] leading-relaxed text-muted-foreground">These values come from the browser. WindOS cannot request more quota than the browser grants, and clearing site data removes the virtual drive.</p>
+          </Panel>
+
+          <Panel>
+            <SectionTitle>Recovery log</SectionTitle>
+            {recoveryEvents.length === 0 ? <p className="text-[8.5px] text-muted-foreground">No recovery or integrity actions have been recorded in this session.</p> : <div className="space-y-1">{recoveryEvents.map((event) => <div key={event.id} className="flex items-start gap-1.5 text-[8.5px]"><Clock className="mt-0.5 size-2.5 text-muted-foreground" /><div className="min-w-0 flex-1"><p className="font-medium">{event.title}</p><p className="text-[8px] text-muted-foreground">{event.detail} · {new Date(event.at).toLocaleString()}</p></div></div>)}</div>}
+          </Panel>
+
           <div className="grid gap-2.5 md:grid-cols-2">
             <Panel>
               <SectionTitle>Startup & recovery modes</SectionTitle>
@@ -201,6 +293,7 @@ export function Recovery() {
               <div className="rounded-lg border border-red-500/25 bg-red-500/5 p-2">
                 <p className="flex items-center gap-1 text-[9px] font-medium text-red-600 dark:text-red-400"><AlertTriangle className="size-3" /> This cannot be undone</p>
                 <p className="mt-0.5 text-[8px] leading-relaxed text-muted-foreground">Deletes the virtual drive, restore points, installed package records, permissions and preferences from this browser. Export a backup first.</p>
+                <GhostButton className="mt-1.5 h-6 text-[8px]" onClick={exportBeforeReset}><Download className="size-2.5" /> Download pre-reset backup</GhostButton>
                 {!wipeArmed ? <GhostButton className="mt-1.5 h-6 text-[8px] text-red-500" onClick={() => setWipeArmed(true)}><Trash2 className="size-2.5" /> Begin reset</GhostButton> : <div className="mt-1.5"><input value={confirmWipe} onChange={(event) => setConfirmWipe(event.target.value)} placeholder="Type WIPE to confirm" className={cn(inputClass, "h-6 text-[8.5px]")} /><div className="mt-1 flex gap-1"><PrimaryButton className="h-6 bg-red-600 text-[8.5px] hover:bg-red-500" disabled={confirmWipe !== "WIPE"} onClick={() => void os.wipeAll()}><Trash2 className="size-2.5" /> Erase everything</PrimaryButton><GhostButton className="h-6 text-[8.5px]" onClick={() => { setWipeArmed(false); setConfirmWipe(""); }}>Cancel</GhostButton></div></div>}
               </div>
               <div className="mt-2 space-y-1 text-[8px] text-muted-foreground"><p className="flex items-start gap-1"><Info className="mt-0.5 size-2.5 shrink-0" /> WindRecovery operates entirely on the virtual drive. It cannot repair your real computer or recover files outside this browser.</p><p className="flex items-start gap-1"><Check className="mt-0.5 size-2.5 shrink-0 text-emerald-500" /> Restore points are checksummed and refused if corrupted.</p></div>
