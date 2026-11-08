@@ -26,7 +26,7 @@ import type {
   SecurityEvent,
   SystemStats,
 } from "./types";
-import { APP_MAP, PREINSTALLED } from "./registry";
+import { APPS, APP_MAP, PREINSTALLED } from "./registry";
 import {
   SEED_FOLDERS,
   VirtualFileSystem,
@@ -203,6 +203,7 @@ const RP_KEY = "windos.restorepoints.v1";
 const ICONS_KEY = "windos.icons.v1";
 const BACKUP_TIME_KEY = "windos.lastbackup.v1";
 const ONBOARD_KEY = "windos.onboarded.v1";
+const GUEST_BACKUP_KEY = "windos.guest.backup.v1";
 
 const readJson = <T,>(key: string, fallback: T): T => {
   try {
@@ -324,9 +325,17 @@ export function OSProvider({ children }: { children: ReactNode }) {
   const [installed, setInstalled] = useState<InstalledApp[]>(() =>
     readJson<InstalledApp[]>(INSTALLED_KEY, defaultInstalled()),
   );
-  const [grants, setGrants] = useState<Record<string, PermissionGrant>>(() =>
-    readJson<Record<string, PermissionGrant>>(GRANTS_KEY, {}),
-  );
+  const [grants, setGrants] = useState<Record<string, PermissionGrant>>(() => {
+    const stored = readJson<Record<string, PermissionGrant>>(GRANTS_KEY, {});
+    const next = { ...stored };
+    // Built-in WindOS applications may post notifications by default. Explicit
+    // revocations are preserved, and store-installed apps still ask first.
+    for (const appId of PREINSTALLED) {
+      const key = `${appId}:notifications`;
+      if (!next[key]) next[key] = { appId, kind: "notifications", granted: true, at: Date.now() };
+    }
+    return next;
+  });
   const [securityEvents, setSecurityEvents] = useState<SecurityEvent[]>([]);
   const [clipboard, setClipboard] = useState<ClipboardEntry[]>(() =>
     readJson<ClipboardEntry[]>(CLIP_KEY, []),
@@ -367,6 +376,28 @@ export function OSProvider({ children }: { children: ReactNode }) {
     root.style.colorScheme = settings.theme;
   }, [settings, guest]);
 
+  // A guest profile is temporary. If the page was reloaded mid-guest-session,
+  // restore the personal profile instead of leaving a guest-locked settings set
+  // persisted with a writable drive.
+  useEffect(() => {
+    fs.readOnly = false;
+    if (!settings.guestSession) return;
+    try {
+      const raw = localStorage.getItem(GUEST_BACKUP_KEY);
+      if (raw) setSettings(JSON.parse(raw) as OSSettings);
+    } catch {
+      /* fall back to clearing the guest flag below */
+    }
+    try {
+      localStorage.removeItem(GUEST_BACKUP_KEY);
+    } catch {
+      /* ignore */
+    }
+    setGuest(false);
+    setSettings((prev) => (prev.guestSession ? { ...prev, guestSession: false, displayName: prev.displayName === "Guest" ? "User" : prev.displayName } : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     writeJson(INSTALLED_KEY, installed);
   }, [installed]);
@@ -393,7 +424,7 @@ export function OSProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void storageEstimate().then(setStorage);
-  }, [restorePoints.length, lastBackupAt]);
+  }, [restorePoints.length, lastBackupAt, fsVersion]);
 
   // Initial load: virtual filesystem, restore points, real storage.
   useEffect(() => {
@@ -562,12 +593,13 @@ export function OSProvider({ children }: { children: ReactNode }) {
     body: string;
     actions?: { label: string; appId: string }[];
   }) {
-    const appId = input.appId;
+    const known = APP_MAP.get(input.appId) ?? APPS.find((app) => app.name === input.appId);
+    const appId = known?.id ?? input.appId;
     if (appId !== "WindOS" && appId !== "system" && !hasPermission(appId, "notifications")) {
       logEvent({
         level: "warning",
         title: "Notification blocked",
-        detail: `${APP_MAP.get(appId)?.name ?? appId} tried to notify without permission.`,
+        detail: `${known?.name ?? input.appId} tried to notify without permission.`,
         appId,
       });
       return;
@@ -592,9 +624,21 @@ export function OSProvider({ children }: { children: ReactNode }) {
   }
 
   function setQuick(patch: Partial<QuickSettings>) {
-    setQuickState((prev) => ({ ...prev, ...patch }));
-    if (patch.airplane !== undefined) {
-      setSettings((prev) => ({ ...prev, nightLight: patch.airplane ? prev.nightLight : prev.nightLight }));
+    setQuickState((prev) => {
+      const next = { ...prev, ...patch };
+      if (patch.airplane === true) {
+        next.wifi = false;
+        next.bluetooth = false;
+      } else if (patch.airplane === false) {
+        next.wifi = true;
+      }
+      if (patch.wifi === true && prev.airplane && patch.airplane === undefined) {
+        next.airplane = false;
+      }
+      return next;
+    });
+    if (patch.nightLight !== undefined) {
+      setSettings((prev) => ({ ...prev, nightLight: patch.nightLight! }));
     }
   }
 
@@ -918,6 +962,11 @@ export function OSProvider({ children }: { children: ReactNode }) {
 
   function startGuest() {
     guestSettingsBackup.current = settings;
+    try {
+      localStorage.setItem(GUEST_BACKUP_KEY, JSON.stringify(settings));
+    } catch {
+      /* ignore */
+    }
     setGuest(true);
     fs.readOnly = true;
     setWindows([]);
@@ -938,7 +987,15 @@ export function OSProvider({ children }: { children: ReactNode }) {
   function endGuest() {
     fs.readOnly = false;
     setGuest(false);
-    if (guestSettingsBackup.current) setSettings(guestSettingsBackup.current);
+    let restored = guestSettingsBackup.current;
+    try {
+      const raw = localStorage.getItem(GUEST_BACKUP_KEY);
+      if (raw) restored = JSON.parse(raw) as OSSettings;
+      localStorage.removeItem(GUEST_BACKUP_KEY);
+    } catch {
+      /* use the in-memory backup */
+    }
+    if (restored) setSettings({ ...restored, guestSession: false });
     guestSettingsBackup.current = null;
     setWindows([]);
     setProcesses([]);
@@ -1197,6 +1254,13 @@ export function OSProvider({ children }: { children: ReactNode }) {
       checksum: checksum(JSON.stringify(data)),
       data,
     };
+    const now = Date.now();
+    setLastBackupAt(now);
+    try {
+      localStorage.setItem(BACKUP_TIME_KEY, String(now));
+    } catch {
+      /* ignore */
+    }
     return JSON.stringify(payload, null, 2);
   }
 
@@ -1213,8 +1277,9 @@ export function OSProvider({ children }: { children: ReactNode }) {
     if (parsed.data.settings) setSettings({ ...DEFAULT_SETTINGS, ...parsed.data.settings });
     if (parsed.data.installed?.length) {
       setInstalled((prev) => {
+        if (mode === "replace") return parsed.data.installed!;
         const map = new Map(prev.map((a) => [a.id, a]));
-        for (const appEntry of parsed.data.installed) map.set(appEntry.id, appEntry);
+        for (const appEntry of parsed.data.installed!) map.set(appEntry.id, appEntry);
         return [...map.values()];
       });
     }
@@ -1261,7 +1326,7 @@ export function OSProvider({ children }: { children: ReactNode }) {
     guestSettingsBackup.current = null;
     setGuest(false);
     sessionStarted.current = false;
-    const keys = [INSTALLED_KEY, GRANTS_KEY, CLIP_KEY, QUICK_KEY, DESKTOP_KEY, RP_KEY, ICONS_KEY, BACKUP_TIME_KEY, ONBOARD_KEY, "windos.settings.v1"];
+    const keys = [INSTALLED_KEY, GRANTS_KEY, CLIP_KEY, QUICK_KEY, DESKTOP_KEY, RP_KEY, ICONS_KEY, BACKUP_TIME_KEY, ONBOARD_KEY, GUEST_BACKUP_KEY, "windos.settings.v1"];
     for (const key of keys) {
       try {
         localStorage.removeItem(key);
@@ -1280,6 +1345,8 @@ export function OSProvider({ children }: { children: ReactNode }) {
     await kvDel(RP_KEY);
     await kvSet("fs.v1", fs.serialize());
     setOnboarded(false);
+    setBootedAt(0);
+    setPower("boot");
     setPower("boot");
     logEvent({ level: "critical", title: "Factory reset", detail: "All WindOS local data was erased and the drive was re-seeded." });
   }

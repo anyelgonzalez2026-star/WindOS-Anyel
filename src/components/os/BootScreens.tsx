@@ -701,7 +701,7 @@ export function SignedOutScreen() {
           Guest session
         </button>
       </div>
-      <button className="mt-4 flex items-center gap-1.5 text-[10px] text-white/30 hover:text-white/60" onClick={os.restoreApp ? () => os.powerOn() : undefined}>
+      <button className="mt-4 flex items-center gap-1.5 text-[10px] text-white/30 hover:text-white/60" onClick={() => os.powerOn()}>
         <Power className="size-3" /> Power options
       </button>
     </div>

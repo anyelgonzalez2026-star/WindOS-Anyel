@@ -10,6 +10,12 @@ export function openFileNode(os: OSContextValue, id: string, payload?: Record<st
   }
   const ext = node.name.split(".").pop()?.toLowerCase() ?? "";
   const mime = node.mime ?? "";
+  if (mime === "application/x-windos-shortcut" || ext === "lnk") {
+    const appId = node.content?.trim() ?? "";
+    if (os.isInstalled(appId)) os.openApp(appId);
+    else os.notify({ appId: "WindOS", title: "Shortcut unavailable", body: "The application for this shortcut is not installed." });
+    return;
+  }
   if (mime.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext)) {
     os.openApp("photos", { openId: id });
   } else if (mime.startsWith("audio/") || mime.startsWith("video/") || ["mp3", "wav", "ogg", "mp4", "webm", "m4a"].includes(ext)) {
@@ -23,7 +29,14 @@ export function openFileNode(os: OSContextValue, id: string, payload?: Record<st
   } else if (["js", "ts", "tsx", "jsx", "html", "css", "json"].includes(ext)) {
     os.openApp("code", { openId: id });
   } else if (["exe", "msi", "appx"].includes(ext)) {
-    os.openApp("compat", { openId: id });
+    let handler = "compat";
+    try {
+      const saved = JSON.parse(localStorage.getItem("windos.app.compat.handlers.v1") ?? "{}") as Record<string, string>;
+      if (saved[ext] === "code") handler = "code";
+    } catch {
+      /* fall back to the safe inspector */
+    }
+    os.openApp(handler, { openId: id, ...payload });
   } else {
     os.openApp(os.settings.preferredEditor ?? "code", { openId: id, ...payload });
   }

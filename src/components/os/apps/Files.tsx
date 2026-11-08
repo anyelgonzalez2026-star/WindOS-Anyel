@@ -339,7 +339,7 @@ export default function Files({ payload }: { payload?: Record<string, unknown> }
         <div className="mx-1 h-4 w-px bg-border" />
         <ToolButton icon={Copy} label="Copy" disabled={!previewNode} onClick={() => previewNode && setClipboard({ mode: "copy", id: previewNode.id })} />
         <ToolButton icon={Scissors} label="Cut" disabled={!previewNode || readOnly} onClick={() => previewNode && setClipboard({ mode: "cut", id: previewNode.id })} />
-        <ToolButton icon={ClipboardIcon} label={clipboard ? "Paste" : "Paste"} disabled={!clipboard || isVirtual} onClick={paste} />
+        <ToolButton icon={Copy} label="Paste" disabled={!clipboard || isVirtual} onClick={paste} />
         <ToolButton icon={Pencil} label="Rename" disabled={!previewNode || readOnly} onClick={() => {
           if (!previewNode) return;
           setDraft(previewNode.name);
@@ -703,9 +703,6 @@ export default function Files({ payload }: { payload?: Record<string, unknown> }
   );
 }
 
-function ClipboardIcon({ className }: { className?: string }) {
-  return <Copy className={className} />;
-}
 
 function SideButton({ icon: Icon, label, active, onClick, badge }: { icon: typeof Star; label: string; active: boolean; onClick: () => void; badge?: number }) {
   return (

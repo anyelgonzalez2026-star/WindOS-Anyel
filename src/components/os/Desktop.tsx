@@ -4,6 +4,7 @@ import { APP_MAP } from "@/lib/os/registry";
 import { wallpaperById } from "@/lib/os/settings";
 import { downloadBlob, downloadText } from "@/lib/os/zip";
 import { iconForFile } from "@/lib/os/fs";
+import { openFileNode } from "@/lib/os/fileActions";
 import type { FSNode, OSNotification } from "@/lib/os/types";
 import { WindowFrame } from "./WindowFrame";
 import { Taskbar } from "./Taskbar";
@@ -103,6 +104,16 @@ export function Desktop() {
         os.lock();
         return;
       }
+      if (mod && event.altKey && event.key.toLowerCase() === "t") {
+        event.preventDefault();
+        os.openApp("terminal");
+        return;
+      }
+      if (mod && event.shiftKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        os.openApp("screen");
+        return;
+      }
       if (mod && event.altKey && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
         event.preventDefault();
         const next =
@@ -197,7 +208,11 @@ export function Desktop() {
       const node = os.fs.byId(item.nodeId);
       if (!node) return;
       if (node.type === "folder") os.openApp("files", { folderId: node.id });
-      else {
+      else if (node.mime === "application/x-windos-shortcut") {
+        const appId = node.content?.trim() ?? "";
+        if (os.isInstalled(appId)) os.openApp(appId);
+        else os.notify({ appId: "WindOS", title: "Shortcut unavailable", body: "The application for this shortcut is not installed." });
+      } else {
         const ext = node.name.split(".").pop()?.toLowerCase() ?? "";
         if (["md", "txt"].includes(ext)) os.openApp("notes", { openId: node.id });
         else if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) os.openApp("photos", { openId: node.id });
@@ -352,6 +367,7 @@ export function Desktop() {
                       position={os.iconPositions[item.key] ?? positionFor(index)}
                       selected={selected === item.key}
                       doubleClick={os.settings.doubleClickOpen}
+                      snap={os.settings.gridSnap}
                       onSelect={() => setSelected(item.key)}
                       onOpen={() => openItem(item)}
                       onMove={(pos) => os.setIconPosition(item.key, pos)}
@@ -465,12 +481,14 @@ function DesktopIcon({
   onOpen,
   onMove,
   onContext,
+  snap,
 }: {
   item: IconItem;
   index: number;
   position: { x: number; y: number };
   selected: boolean;
   doubleClick: boolean;
+  snap: boolean;
   onSelect: () => void;
   onOpen: () => void;
   onMove: (pos: { x: number; y: number }) => void;
@@ -499,9 +517,11 @@ function DesktopIcon({
       const dy = e.clientY - startY;
       if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved.current = true;
       if (!moved.current) return;
+      const rawX = Math.max(4, Math.min((bounds?.width ?? 800) - 80, base.x + dx));
+      const rawY = Math.max(4, Math.min((bounds?.height ?? 600) - 84, base.y + dy));
       setOffset({
-        x: Math.max(4, Math.min((bounds?.width ?? 800) - 80, base.x + dx)),
-        y: Math.max(4, Math.min((bounds?.height ?? 600) - 84, base.y + dy)),
+        x: snap ? Math.round(rawX / 16) * 16 : rawX,
+        y: snap ? Math.round(rawY / 16) * 16 : rawY,
       });
     };
     const up = () => {
@@ -527,7 +547,10 @@ function DesktopIcon({
         touchAction: "none",
       }}
       onPointerDown={pointerDown}
-      onClick={() => onSelect()}
+      onClick={() => {
+        onSelect();
+        if (!doubleClick && !moved.current) onOpen();
+      }}
       onDoubleClick={() => (doubleClick ? onOpen() : undefined)}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -623,7 +646,7 @@ function DesktopContextMenu({
             <CtxItem icon={<MousePointerClick className="size-3.5" />} label="Open" onClick={() => {
               onClose();
               if (item.appId) os.openApp(item.appId);
-              else if (item.nodeId) os.openApp("files", { openId: item.nodeId });
+              else if (item.nodeId) openFileNode(os, item.nodeId);
             }} />
             {app && (
               <CtxItem
