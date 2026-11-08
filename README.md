@@ -8,9 +8,9 @@ WindOS is a browser-hosted desktop operating system simulator. It runs entirely 
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Marketing landing page and product overview |
-| `/os` | The complete WindOS desktop — no account required |
-| `/auth` | Optional Convex-backed account sign-in; returns to `/os` |
+| `/` | WindOS desktop — boots immediately, no account required |
+| `/os` | Alias for the same WindOS desktop (existing links keep working) |
+| `/auth` | Optional Convex-backed account sign-in; returns to the desktop |
 | `/dashboard` | Protected starter account page |
 
 The OS is local-first: files live in IndexedDB, while settings, permissions, clipboard history and restore points live in `localStorage` for this origin. Nothing is uploaded to a WindOS server.

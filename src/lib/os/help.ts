@@ -102,7 +102,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "profile",
     title: "Your profile and guest mode",
     category: "Accounts",
-    body: "WindOS works without an account. Your display name and avatar colour are stored locally. A guest session starts with default preferences and a read-only drive; ending it restores your profile. An optional email sign-in exists for the landing experience but is never required to use the OS.",
+    body: "WindOS works without an account. Your display name and avatar colour are stored locally. A guest session starts with default preferences and a read-only drive; ending it restores your profile. An optional email sign-in is available at /auth but is never required to use the OS.",
     tags: ["profile", "guest", "account"],
   },
   {
